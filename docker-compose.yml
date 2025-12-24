@@ -1,0 +1,55 @@
+version: "3.9"
+
+services:
+  english-web:
+    build: .
+    command: bash -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+    volumes:
+      - .:/app
+    ports:
+      - "9005:8000"
+    depends_on:
+      - english-redis
+      - english-db
+      - english-celery
+
+  english-redis:
+    image: redis:7
+    ports:
+      - "9006:6379"
+
+  english-db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: englishability_db
+      POSTGRES_USER: englishability_user
+      POSTGRES_PASSWORD: englishability_pass
+    ports:
+      - "9007:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+
+  english-celery:
+    build: .
+    command: celery -A Englishability worker --loglevel=info
+    volumes:
+      - .:/app
+    depends_on:
+      - english-redis
+      - english-db
+    environment:
+      - DJANGO_SETTINGS_MODULE=Englishability.settings
+
+  english-celery-beat:
+    build: .
+    command: celery -A Englishability beat --loglevel=info
+    volumes:
+      - .:/app
+    depends_on:
+      - english-redis
+      - english-db
+    environment:
+      - DJANGO_SETTINGS_MODULE=Englishability.settings
+
+volumes:
+  postgres_data:
