@@ -1,18 +1,7 @@
-# accounts/views.py
-
-# =========================
-# Python Standard Library
-# =========================
 import logging
 from collections import defaultdict
 from datetime import datetime
-
 import pandas as pd
-
-
-# =========================
-# Django
-# =========================
 from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
 from django.db import transaction
@@ -22,56 +11,26 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.timezone import make_aware
 
-
-# =========================
-# Django REST Framework
-# =========================
 from rest_framework import status
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-
-# =========================
-# Simple JWT
-# =========================
 from rest_framework_simplejwt.tokens import (RefreshToken,UntypedToken,TokenError,BlacklistedToken,OutstandingToken,)
 
-
-# =========================
-# Swagger (drf-yasg)
-# =========================
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 
-
-# =========================
-# Celery / Tasks
-# =========================
 from .tasks import send_reset_password_email
 
-
-# =========================
-# Auth / Permissions / Tokens
-# =========================
 from .tokens import CustomRefreshToken, IsStudent
 
-
-# =========================
-# Domain Services
-# =========================
 from students.scope import DataScopeService
 from students.statistics import StudentStatisticsService
 
-# =========================
-# Models
-# =========================
 from .models import (Attendance,Class,CompetitionScore,ExamAnswerRecord, ExamOption,ExamPaper,ExamPart,ExamQuestion,ExamRecord,League,Student, StudentAchievement,Teacher, TestRecord, UserAccount,)
 
-# =========================
-# Serializers
-# =========================
 from .serializers import (ClassDashboardSerializer, ExamPaperImportSerializer,ExamPaperRetrieveSerializer,ExamSubmitSerializer,FirstChangePasswordSerializer,ForgotPasswordSerializer,LoginSerializer, ResetPasswordSerializer, StudentAchievementCreateSerializer, StudentAchievementSerializer,StudentOutputSerializer,)
 
 logger = logging.getLogger(__name__)
@@ -750,7 +709,7 @@ class CompetitionScoreAPIView(APIView):
 # 競技排行榜
 class WeeklyCompetitionRankingAPIView(APIView):
     """
-    當週競技積分排行榜
+    當週競技積分排行榜（含與昨天比較）
     """
     permission_classes = [IsAuthenticated, IsStudent]
 
@@ -766,7 +725,50 @@ class WeeklyCompetitionRankingAPIView(APIView):
                 required=True
             )
         ],
-        responses={200: openapi.Response(description="查詢成功")},
+        responses={
+            200: openapi.Response(
+                description="查詢成功",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        "scope": openapi.Schema(type=openapi.TYPE_STRING),
+                        "display_type": openapi.Schema(type=openapi.TYPE_STRING),
+                        "display_name": openapi.Schema(type=openapi.TYPE_STRING),
+                        "has_done_today": openapi.Schema(type=openapi.TYPE_BOOLEAN,description="今天是否已有競技積分紀錄"),
+                        "week_range": openapi.Schema(type=openapi.TYPE_STRING),
+                        "my_rank": openapi.Schema(type=openapi.TYPE_INTEGER, nullable=True),
+                        "my_score": openapi.Schema(type=openapi.TYPE_INTEGER),
+                        "compare_yesterday": openapi.Schema(
+                            type=openapi.TYPE_OBJECT,
+                            properties={
+                                "rank_diff": openapi.Schema(
+                                    type=openapi.TYPE_INTEGER,
+                                    description="與昨天相比名次變化（正數=進步，負數=退步）",
+                                    nullable=True
+                                ),
+                                "score_diff": openapi.Schema(
+                                    type=openapi.TYPE_INTEGER,
+                                    description="與昨天相比積分差異"
+                                ),
+                            }
+                        ),
+                        "top_30": openapi.Schema(
+                            type=openapi.TYPE_ARRAY,
+                            items=openapi.Schema(
+                                type=openapi.TYPE_OBJECT,
+                                properties={
+                                    "rank": openapi.Schema(type=openapi.TYPE_INTEGER),
+                                    "student_id": openapi.Schema(type=openapi.TYPE_INTEGER),
+                                    "student_name": openapi.Schema(type=openapi.TYPE_STRING),
+                                    "school_name": openapi.Schema(type=openapi.TYPE_STRING),
+                                    "score": openapi.Schema(type=openapi.TYPE_INTEGER),
+                                }
+                            )
+                        )
+                    }
+                )
+            )
+        },
         tags=["competition-score"]
     )
     def get(self, request):
@@ -780,6 +782,8 @@ class WeeklyCompetitionRankingAPIView(APIView):
 
         # ===== 1️⃣ 當週區間 =====
         today = timezone.localdate()
+        yesterday = today - timezone.timedelta(days=1)
+
         week_start = today - timezone.timedelta(days=today.weekday())
         week_end = week_start + timezone.timedelta(days=6)
 
@@ -793,7 +797,7 @@ class WeeklyCompetitionRankingAPIView(APIView):
                 school_name=student.school_name,
                 school_type=student.school_type
             )
-            display_name = student.school_name  # ⭐ 學校名稱
+            display_name = student.school_name
 
         elif scope == "league":
             league = League.objects.filter(
@@ -804,7 +808,7 @@ class WeeklyCompetitionRankingAPIView(APIView):
             if not league:
                 return Response({"message": "學生未加入任何聯盟"}, status=400)
 
-            display_name = league.league_name  # ⭐ 聯盟名稱
+            display_name = league.league_name
 
             league_school_names = League.objects.filter(
                 league_name=league.league_name,
@@ -818,7 +822,40 @@ class WeeklyCompetitionRankingAPIView(APIView):
 
         student_ids = students_qs.values_list("id", flat=True)
 
-        # ===== 3️⃣ 彙總當週積分 =====
+        # ===== 3️⃣ 排名計算 function =====
+        def get_my_rank_and_score(date_from, date_to):
+            scores = (
+                CompetitionScore.objects.filter(
+                    student_id__in=student_ids,
+                    time__date__range=(date_from, date_to)
+                )
+                .values("student")
+                .annotate(total_score=Sum("score"))
+                .order_by("-total_score")
+            )
+
+            my_rank = None
+            my_score = 0
+
+            for idx, row in enumerate(scores, start=1):
+                if row["student"] == student.id:
+                    my_rank = idx
+                    my_score = row["total_score"]
+                    break
+
+            return my_rank, my_score
+
+        # ===== 4️⃣ 今天 / 昨天數據 =====
+        today_rank, today_score = get_my_rank_and_score(week_start, today)
+        yesterday_rank, yesterday_score = get_my_rank_and_score(week_start, yesterday)
+
+        rank_diff = None
+        score_diff = today_score - yesterday_score
+
+        if today_rank and yesterday_rank:
+            rank_diff = yesterday_rank - today_rank
+
+        # ===== 5️⃣ 當週完整排行榜 =====
         scores = (
             CompetitionScore.objects.filter(
                 student_id__in=student_ids,
@@ -829,11 +866,12 @@ class WeeklyCompetitionRankingAPIView(APIView):
             .order_by("-total_score")
         )
 
-        # ===== 4️⃣ 排名計算 =====
+        has_done_today = CompetitionScore.objects.filter(
+            student=student,
+            time__date=today
+        ).exists()
+        
         ranking = []
-        my_rank = None
-        my_score = 0
-
         student_map = {s.id: s for s in students_qs}
 
         for idx, row in enumerate(scores, start=1):
@@ -849,17 +887,19 @@ class WeeklyCompetitionRankingAPIView(APIView):
                 "score": row["total_score"]
             })
 
-            if stu.id == student.id:
-                my_rank = idx
-                my_score = row["total_score"]
-
         return Response({
             "scope": scope,
-            "display_type": display_type,   # school / league
-            "display_name": display_name,   # ⭐ 學校名 or 聯盟名
+            "display_type": display_type,
+            "display_name": display_name,
+            "school_type" : student.school_type,
+            "has_done_today": has_done_today,
             "week_range": f"{week_start} ~ {week_end}",
-            "my_rank": my_rank,
-            "my_score": my_score,
+            "my_rank": today_rank,
+            "my_score": today_score,
+            "compare_yesterday": {
+                "rank_diff": rank_diff,
+                "score_diff": score_diff
+            },
             "top_30": ranking[:30]
         })
         
@@ -1070,49 +1110,7 @@ class ImportExamPaperAPIView(APIView):
         )
         
 class RetrieveExamPaperAPIView(APIView):
-    """
-    依 code 取得試卷題目
-    """
 
-    @swagger_auto_schema(
-        operation_summary="取得試卷題目",
-        operation_description="前端輸入試卷 code，回傳完整試卷題目與選項",
-        manual_parameters=[
-            openapi.Parameter(
-                name="code",
-                in_=openapi.IN_QUERY,
-                type=openapi.TYPE_STRING,
-                required=True,
-                description="試卷代碼（例如 ps-1）"
-            )
-        ],
-        responses={
-            200: openapi.Response(
-                description="查詢成功",
-                schema=openapi.Schema(
-                    type=openapi.TYPE_OBJECT,
-                    properties={
-                        "code": openapi.Schema(type=openapi.TYPE_STRING),
-                        "name": openapi.Schema(type=openapi.TYPE_STRING),
-                        "level": openapi.Schema(type=openapi.TYPE_STRING),
-                        "info": openapi.Schema(type=openapi.TYPE_STRING),
-                        "open_time": openapi.Schema(type=openapi.TYPE_STRING),
-                        "close_time": openapi.Schema(type=openapi.TYPE_STRING),
-                        "parts": openapi.Schema(
-                            type=openapi.TYPE_OBJECT,
-                            additional_properties=openapi.Schema(
-                                type=openapi.TYPE_ARRAY,
-                                items=openapi.Schema(type=openapi.TYPE_OBJECT)
-                            )
-                        )
-                    }
-                )
-            ),
-            404: openapi.Response(description="試卷不存在"),
-            403: openapi.Response(description="尚未開放作答")
-        },
-        tags=["exam-paper"]
-    )
     def get(self, request):
         code = request.query_params.get("code")
         if not code:
@@ -1130,85 +1128,82 @@ class RetrieveExamPaperAPIView(APIView):
             return Response({"message": "試卷尚未開放"}, status=403)
 
         serializer = ExamPaperRetrieveSerializer(exam_paper)
-        return Response(serializer.data)        
+        return Response(serializer.data)    
         
 class SubmitExamAPIView(APIView):
     """
-    送出作答 / 自動計分（每份試卷只能考一次）
+    送出考試作答（每份試卷只能作答一次，自動計分）
     """
     permission_classes = [IsAuthenticated]
 
-    @swagger_auto_schema(
-        operation_summary="送出考試作答",
-        request_body=ExamSubmitSerializer,
-        responses={
-            200: openapi.Response(
-                description="作答完成",
-                schema=openapi.Schema(
-                    type=openapi.TYPE_OBJECT,
-                    properties={
-                        "score": openapi.Schema(type=openapi.TYPE_INTEGER),
-                        "total": openapi.Schema(type=openapi.TYPE_INTEGER),
-                        "correct": openapi.Schema(type=openapi.TYPE_INTEGER),
-                    }
-                )
-            ),
-            400: openapi.Response(description="資料錯誤"),
-            403: openapi.Response(description="尚未開放考試 / 已考過"),
-        },
-        tags=["exam-paper"]
-    )
     def post(self, request):
         serializer = ExamSubmitSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        try:
-            exam_paper = ExamPaper.objects.get(code=data["code"])
-        except ExamPaper.DoesNotExist:
-            return Response({"message": "試卷不存在"}, status=404)
+        # ===== 取得試卷 =====
+        exam_paper = get_object_or_404(
+            ExamPaper,
+            code=data["code"]
+        )
 
         now = timezone.now()
         if now < exam_paper.open_time or now > exam_paper.close_time:
-            return Response({"message": "考試未開放"}, status=403)
+            return Response(
+                {"message": "考試未開放"},
+                status=403
+            )
 
         student = request.user.student
 
-        # ===== 檢查是否已考過 =====
-        if ExamRecord.objects.filter(student=student, exam_paper=exam_paper).exists():
-            return Response({"message": "此試卷已作答過，每份試卷只能考一次"}, status=403)
+        # ===== 是否已作答過 =====
+        if ExamRecord.objects.filter(
+            student=student,
+            exam_paper=exam_paper
+        ).exists():
+            return Response(
+                {"message": "此試卷已作答過，每份試卷只能考一次"},
+                status=403
+            )
 
         # ===== 建立考試紀錄 =====
         exam_record = ExamRecord.objects.create(
             student=student,
             exam_paper=exam_paper,
-            answer_time=now,
+            answer_time=now
         )
+
+        # ===== 取出本試卷所有題目 =====
+        questions = ExamQuestion.objects.filter(
+            exam_part__exam_paper=exam_paper
+        ).prefetch_related("options")
+
+        question_map = {q.id: q for q in questions}
 
         total_questions = 0
         correct_count = 0
 
-        question_map = {
-            q.external_id: q
-            for q in ExamQuestion.objects.filter(
-                exam_part__exam_paper=exam_paper
-            ).prefetch_related("options")
-        }
-
+        # ===== 處理每一題作答 =====
         for ans in data["answers"]:
             q = question_map.get(ans["question_id"])
             if not q:
+                # 非本試卷題目，直接忽略
                 continue
 
             total_questions += 1
 
             selected_option = None
-            for opt in q.options.all():
-                if opt.external_id == ans.get("selected_option_id"):
-                    selected_option = opt
-                    break
+            selected_option_id = ans.get("selected_option_id")
 
-            is_correct = bool(selected_option and selected_option.description == q.answer)
+            if selected_option_id:
+                selected_option = q.options.filter(
+                    id=selected_option_id
+                ).first()
+
+            # 🔥 關鍵：一定要是 True / False
+            is_correct = False
+            if selected_option:
+                is_correct = selected_option.description == q.answer
 
             if is_correct:
                 correct_count += 1
@@ -1216,13 +1211,21 @@ class SubmitExamAPIView(APIView):
             ExamAnswerRecord.objects.create(
                 exam_record=exam_record,
                 question=q,
-                selected_option_id=ans.get("selected_option_id"),
-                selected_text=selected_option.description if selected_option else "",
+                selected_option=selected_option,
+                selected_text=(
+                    selected_option.description
+                    if selected_option else ""
+                ),
                 correct_answer=q.answer,
                 is_correct=is_correct
             )
 
-        score = int((correct_count / total_questions) * 100) if total_questions else 0
+        # ===== 計分 =====
+        score = (
+            int((correct_count / total_questions) * 100)
+            if total_questions > 0 else 0
+        )
+
         exam_record.score = score
         exam_record.save()
 
@@ -1233,9 +1236,6 @@ class SubmitExamAPIView(APIView):
         })
 
 class ExamHistoryAPIView(APIView):
-    """
-    查詢學生試卷作答歷史（含錯題與正確答案），依 part 分組
-    """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -1256,12 +1256,15 @@ class ExamHistoryAPIView(APIView):
 
         answers = ExamAnswerRecord.objects.filter(
             exam_record=exam_record
-        ).select_related("question", "question__exam_part").prefetch_related(
+        ).select_related(
+            "question",
+            "question__exam_part",
+            "selected_option"
+        ).prefetch_related(
             "question__options"
         )
 
-        # 按 part_key 分組
-        parts_dict = defaultdict(list)
+        parts = defaultdict(list)
         correct_count = 0
 
         for ans in answers:
@@ -1269,31 +1272,24 @@ class ExamHistoryAPIView(APIView):
             if ans.is_correct:
                 correct_count += 1
 
-            question_data = {
-                "question_id": q.external_id,
+            parts[q.exam_part.part_key].append({
+                "question_id": q.id,  # 🔥 系統 id
                 "question_text": q.question_text,
                 "options": [
                     {
-                        "id": opt.external_id,
+                        "id": opt.id,
                         "text": opt.description
                     }
                     for opt in q.options.all()
                 ],
-                "selected_option_id": ans.selected_option_id,
+                "selected_option_id": (
+                    ans.selected_option.id
+                    if ans.selected_option else None
+                ),
                 "selected_text": ans.selected_text,
                 "correct_answer": ans.correct_answer,
                 "is_correct": ans.is_correct
-            }
-
-            parts_dict[q.exam_part.part_key].append(question_data)
-
-        # 轉成 list
-        questions_by_part = [
-            {"part_key": part_key, "questions": q_list}
-            for part_key, q_list in parts_dict.items()
-        ]
-
-        total = len(answers)
+            })
 
         return Response({
             "code": exam_paper.code,
@@ -1301,13 +1297,19 @@ class ExamHistoryAPIView(APIView):
             "score": exam_record.score,
             "answer_time": exam_record.answer_time,
             "summary": {
-                "total": total,
+                "total": len(answers),
                 "correct": correct_count,
-                "wrong": total - correct_count
+                "wrong": len(answers) - correct_count
             },
-            "questions": questions_by_part
+            "questions": [
+                {
+                    "part_key": key,
+                    "questions": value
+                }
+                for key, value in parts.items()
+            ]
         })
-
+        
 class DashboardClassAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -1514,6 +1516,7 @@ class StudentDetailDashboardAPIView(APIView):
         return Response({
             "student_name": student.student_name,
             "school_name": student.school_name,  # 或 student_class.school_name
+            "school_type": student.school_type, 
             "class_name": class_display,
             "attendance_days": stats.attendance_days(),
             "weekly_competition_score": stats.weekly_competition_score(),

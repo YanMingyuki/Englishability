@@ -83,7 +83,8 @@ class ExamPaperImportSerializer(serializers.Serializer):
 class ExamOptionSerializer(serializers.ModelSerializer):
     class Meta:
         model = ExamOption
-        fields = ("external_id", "description")
+        fields = ("id", "external_id", "description")
+
 
 class ExamQuestionSerializer(serializers.ModelSerializer):
     options = ExamOptionSerializer(many=True)
@@ -91,6 +92,7 @@ class ExamQuestionSerializer(serializers.ModelSerializer):
     class Meta:
         model = ExamQuestion
         fields = (
+            "id",           # 🔥 系統唯一
             "external_id",
             "island",
             "unit",
@@ -99,7 +101,6 @@ class ExamQuestionSerializer(serializers.ModelSerializer):
             "question_text",
             "options",
         )
-
 class ExamPaperRetrieveSerializer(serializers.ModelSerializer):
     parts = serializers.SerializerMethodField()
 
@@ -125,9 +126,11 @@ class ExamPaperRetrieveSerializer(serializers.ModelSerializer):
 
 # 考試卷計分並記錄
 class AnswerSubmitSerializer(serializers.Serializer):
-    question_id = serializers.IntegerField()
-    selected_option_id = serializers.IntegerField(required=False)
-
+    question_id = serializers.IntegerField()          # 🔥 ExamQuestion.id
+    selected_option_id = serializers.IntegerField(
+        required=False,
+        allow_null=True
+    )
 
 class ExamSubmitSerializer(serializers.Serializer):
     code = serializers.CharField()
@@ -137,7 +140,7 @@ class ExamSubmitSerializer(serializers.Serializer):
 class AnswerOptionSerializer(serializers.ModelSerializer):
     class Meta:
         model = ExamOption
-        fields = ("external_id", "description")
+        fields = ("id", "description")
 
 
 class ExamHistoryQuestionSerializer(serializers.Serializer):

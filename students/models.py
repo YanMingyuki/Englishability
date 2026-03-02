@@ -212,7 +212,12 @@ class ExamAnswerRecord(models.Model):
         on_delete=models.CASCADE
     )
 
-    selected_option_id = models.IntegerField(null=True, blank=True)
+    selected_option = models.ForeignKey(
+        ExamOption,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL
+    )
     selected_text = models.CharField(max_length=200, blank=True)
 
     correct_answer = models.CharField(max_length=200)

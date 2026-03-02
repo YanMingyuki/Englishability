@@ -9,6 +9,7 @@ https://docs.djangoproject.com/en/5.2/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
+from corsheaders.defaults import default_headers
 
 from pathlib import Path
 from datetime import timedelta
@@ -37,7 +38,10 @@ DEBUG = True
 # ]
 
 ALLOWED_HOSTS = ["*"]
-
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "authorization",
+    "ngrok-skip-browser-warning",  # ⭐ 關鍵
+]
 
 # Application definition
 
@@ -61,9 +65,11 @@ REST_FRAMEWORK = {
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
 }
-
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_CREDENTIALS = True
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',  # ⭐ 一定要最前面之一
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -71,8 +77,6 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
-
 ]
 
 ROOT_URLCONF = 'Englishability.urls'
