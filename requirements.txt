@@ -96,3 +96,4 @@ zope.interface==7.2
 python-barcode==0.16.0
 tw-invoice == 2023.9.6
 cryptography>=41.0 
+mozilla-django-oidc

@@ -8,6 +8,8 @@ from drf_yasg import openapi
 from django.contrib import admin
 from django.urls import path
 
+from students.views import OIDCCallbackView, OIDCLoginView
+
 schema_view = get_schema_view(
    openapi.Info(
       title="Englishability API",
@@ -24,5 +26,6 @@ urlpatterns = [
     path('api/questionbank/', include('questionbank.urls')),
     path('api/students/', include('students.urls')), 
     path('api/swagger/', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),
-
+    path('api/oidclogin/', OIDCLoginView.as_view(), name='oidc-login'),
+    path('api/oidccallback/', OIDCCallbackView.as_view(), name='oidc-callback'),
 ]

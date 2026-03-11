@@ -210,3 +210,40 @@ DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL")
 DEFAULT_TO_EMAIL = os.getenv("DEFAULT_TO_EMAIL")
 
 FRONTEND_URL = " https://4ef4c372f5d7.ngrok-free.app"
+
+# OIDC 配置
+OIDC_OP_AUTHORIZATION_ENDPOINT = 'https://oidc.kh.edu.tw/oauth2/auth'
+OIDC_OP_TOKEN_ENDPOINT = 'https://oidc.kh.edu.tw/oauth2/token'
+OIDC_OP_USER_ENDPOINT = 'https://oidc.kh.edu.tw/userinfo'
+OIDC_OP_JWKS_ENDPOINT = 'https://oidc.kh.edu.tw/.well-known/jwks.json'
+
+OIDC_RP_CLIENT_ID = 'kh_vendor_a95da8c087d6f9c3f62acc5e22c26f42'  # 提供的 client_id
+OIDC_RP_CLIENT_SECRET = '38efe712ebe3b6af5d7365441cf2e4d5b6d3c9dc07aa977f74d8f1c8e6c134d1'  # 提供的 client_secret
+
+# 定義要的 scope
+OIDC_SCOPES = [
+    'openid', 'email', 'kh_profile', 'kh_classes', 'kh_titles'
+]
+
+# 提供的 Callback URL 更新
+OIDC_RP_CALLBACK_URLS = [
+    'https://www.elr.kh.edu.tw/api/oidccallback/',
+    'https://englishability.rootadviser.com/api/oidccallback/'
+]
+
+# 設定 OIDC 配置
+OIDC_RP_GRANT_TYPES = [
+    'authorization_code'
+]
+OIDC_RP_RESPONSE_TYPES = ['code']
+
+# Token 端點認證方式
+OIDC_TOKEN_ENDPOINT_AUTH_METHOD = 'client_secret_post'
+
+# 資料填入 metadata
+OIDC_METADATA = {
+    'allow_fields': ['fullname', 'email']
+}
+
+# JWT 解析後需要的 Claim
+OIDC_USERINFO_ENABLED = True

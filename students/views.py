@@ -23,7 +23,10 @@ from rest_framework_simplejwt.tokens import (RefreshToken,UntypedToken,TokenErro
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from students.services.dashboard_service import get_today_attendance_count, get_today_points, get_total_stars
+from mozilla_django_oidc.auth import OIDCAuthentication
+from rest_framework.exceptions import AuthenticationFailed
 
+from mozilla_django_oidc.views import OIDCAuthenticationRequestView, OIDCCallbackView as BaseOIDCCallbackView
 
 from .tasks import send_reset_password_email
 
@@ -83,162 +86,133 @@ class LoginView(APIView):
             response_data["student_id"] = student.id if student else None
 
         return Response(response_data)
-
-# --------------------------------
-# Excel Import API
-# --------------------------------
-class ExcelImportView(APIView):
-    parser_classes = [MultiPartParser, FormParser]
+class OIDCLoginView(APIView):
     permission_classes = []
 
-    @swagger_auto_schema(
-        operation_description="匯入 Excel，自動建立老師、學生與班級資料",
-        manual_parameters=[
-            openapi.Parameter(
-                name="file",
-                in_=openapi.IN_FORM,
-                type=openapi.TYPE_FILE,
-                description="上傳 Excel 檔案（.xlsx）",
-                required=True,
-            )
-        ],
-        responses={
-            200: openapi.Response(
-                description="匯入成功",
-                examples={"application/json": {"detail": "Excel 匯入成功"}}
-            )
-        }
-    )
     def post(self, request):
-        file = request.FILES.get("file")
-        if not file:
-            return Response({"detail": "請提供 Excel 檔案"}, status=400)
+        # 使用 OIDCAuthentication 來驗證 id_token
+        oidc_auth = OIDCAuthentication()
+        user_info = oidc_auth.authenticate(request)
+        
+        if not user_info:
+            raise AuthenticationFailed("無法認證使用者資料")
 
-        # ================================
-        # 1️⃣ 讀取 Excel
-        # ================================
-        df = pd.read_excel(file, dtype={"student_id": str})
-        df.columns = df.columns.str.strip().str.lower()
+        # 取得 OIDC 回傳的 id_token 資料
+        user_data = user_info[0]  # User data 包含 email, sub 等資訊
+        user_email = user_data.get("email")
+        user_sub = user_data.get("sub")
+        user_fullname = user_data.get("fullname")
+        user_role = "student" if user_data.get("kh_titles") and "學生" in user_data["kh_titles"].values() else "teacher"
 
-        column_map = {
-            "姓名": "name",
-            "名字": "name",
-        }
-        df.rename(columns=column_map, inplace=True)
+        # 查詢資料庫中的 UserAccount
+        if user_role == "student":
+            user = UserAccount.objects.filter(username=user_sub).first()
+        else:
+            user = UserAccount.objects.filter(email=user_email).first()
+        
+        if not user:
+            # 若使用者不存在，創建新使用者
+            if user_role == "student":
+                user = UserAccount.objects.create(
+                    username=user_sub,
+                    email=user_email,
+                    role=user_role,
+                    first_login=True,
+                )
+            else:
+                user = UserAccount.objects.create(
+                    username=user_sub,
+                    email=user_email,
+                    role=user_role,
+                    first_login=True,
+                )
 
-        logger.warning("=== Excel 欄位 ===")
-        logger.warning(df.columns.tolist())
-        logger.warning("=== Excel 資料 ===")
-        logger.warning("\n" + df.to_string())
-
-        # ================================
-        # 2️⃣ 必要欄位檢查
-        # ================================
-        required_cols = ["role", "school_name", "school_type", "name"]
-        missing = [c for c in required_cols if c not in df.columns]
-        if missing:
-            return Response(
-                {
-                    "detail": "Excel 缺少必要欄位",
-                    "missing_columns": missing,
-                },
-                status=400,
+        # 根據 role 判斷角色資料
+        if user_role == "student":
+            student = Student.objects.create(
+                user=user,
+                student_id=user_sub,
+                student_name=user_fullname,
+                school_name="學校名稱",  # 假設學校名稱會在 OIDC 中回傳
+                school_type="學校類型"   # 假設學校類型會在 OIDC 中回傳
             )
+        elif user_role == "teacher":
+            teacher = Teacher.objects.create(
+                user=user,
+                teacher_name=user_fullname,
+                school_name="學校名稱",  # 假設學校名稱會在 OIDC 中回傳
+                school_type="學校類型"   # 假設學校類型會在 OIDC 中回傳
+            )
+        
+        # 創建 access token 和 refresh token
+        refresh = CustomRefreshToken.for_user(user)
 
-        # ================================
-        # 3️⃣ 交易處理（非常重要）
-        # ================================
-        with transaction.atomic():
+        response_data = {
+            "access": str(refresh.access_token),
+            "refresh": str(refresh),
+            "role": user.role,
+            "first_login": user.first_login,
+        }
 
-            for index, row in df.iterrows():
-                role = str(row["role"]).strip().lower()
-                school_name = str(row["school_name"]).strip()
-                school_type = str(row["school_type"]).strip()
-                name = str(row["name"]).strip()
+        # 若為學生，返回 student_id
+        if user.role == "student":
+            response_data["student_id"] = user_sub  # 使用者的 sub 作為學生 ID
 
-                # ============================
-                # 👩‍🏫 老師
-                # ============================
-                if role != "student":
-                    email = str(row.get("email", "")).strip()
-                    grade = int(row["grade"])
-                    classroom = str(row["classroom"]).strip()
+        return Response(response_data)
+    
+class OIDCCallbackView(BaseOIDCCallbackView):
+    """
+    處理 OIDC 回調，解析 token 並將用戶登入。
+    """
+    def post(self, request, *args, **kwargs):
+        # 確保 OIDC 登入成功，並返回用戶資料
+        user_info = self.get_user_info_from_oidc(request)
 
-                    user, _ = UserAccount.objects.get_or_create(
-                        username=email,
-                        defaults={
-                            "email": email,
-                            "role": role,
-                        }
-                    )
-                    user.set_password(DEFAULT_PASSWORD)
-                    user.save()
+        if not user_info:
+            raise AuthenticationFailed("OIDC 認證失敗")
 
-                    teacher, _ = Teacher.objects.get_or_create(
-                        user=user,
-                        defaults={
-                            "school_name": school_name,
-                            "school_type": school_type,
-                            "teacher_name": name,
-                        }
-                    )
+        # 這邊處理登入邏輯，例如創建或查詢 UserAccount 資料
+        user_data = user_info[0]  # User data 包含 email, sub 等資訊
+        user_email = user_data.get("email")
+        user_sub = user_data.get("sub")
+        user_fullname = user_data.get("fullname")
+        user_role = "student" if "學生" in user_data.get("kh_titles", {}).values() else "teacher"
 
-                    cls, _ = Class.objects.get_or_create(
-                        school_name=school_name,
-                        school_type=school_type,
-                        grade=grade,
-                        classroom=classroom,
-                        defaults={"teachers": []}
-                    )
+        # 查詢資料庫中的 UserAccount
+        user = UserAccount.objects.filter(username=user_sub).first() if user_role == "student" else UserAccount.objects.filter(email=user_email).first()
+        
+        if not user:
+            # 若使用者不存在，創建新使用者
+            if user_role == "student":
+                user = UserAccount.objects.create(
+                    username=user_sub,
+                    email=user_email,
+                    role=user_role,
+                    first_login=True,
+                )
+            else:
+                user = UserAccount.objects.create(
+                    username=user_sub,
+                    email=user_email,
+                    role=user_role,
+                    first_login=True,
+                )
 
-                    # ⭐ 關鍵修正：同步寫入老師
-                    if name not in cls.teachers:
-                        cls.teachers.append(name)
-                        cls.save()
+        # 創建 Access Token 和 Refresh Token
+        refresh = CustomRefreshToken.for_user(user)
 
-                # ============================
-                # 👨‍🎓 學生
-                # ============================
-                else:
-                    raw_sid = str(row.get("student_id", "")).strip()
-                    if raw_sid.lower() == "nan" or not raw_sid:
-                        raise ValueError(f"第 {index+2} 列學生缺少 student_id")
+        response_data = {
+            "access": str(refresh.access_token),
+            "refresh": str(refresh),
+            "role": user.role,
+            "first_login": user.first_login,
+        }
 
-                    if raw_sid.endswith(".0"):
-                        raw_sid = raw_sid[:-2]
-                    student_id = raw_sid
+        # 若為學生，返回 student_id
+        if user.role == "student":
+            response_data["student_id"] = user_sub  # 使用者的 sub 作為學生 ID
 
-                    grade = int(row["grade"])
-                    classroom = str(row["classroom"]).strip()
-
-                    user, _ = UserAccount.objects.get_or_create(
-                        username=student_id,
-                        defaults={"role": "student"}
-                    )
-                    user.set_password(DEFAULT_PASSWORD)
-                    user.save()
-
-                    cls, _ = Class.objects.get_or_create(
-                        school_name=school_name,
-                        school_type=school_type,
-                        grade=grade,
-                        classroom=classroom,
-                        defaults={"teachers": []}
-                    )
-
-                    Student.objects.get_or_create(
-                        user=user,
-                        defaults={
-                            "school_name": school_name,
-                            "school_type": school_type,
-                            "student_name": name,
-                            "student_class": cls,
-                            "student_id": student_id,
-                        }
-                    )
-
-        return Response({"detail": "Excel 匯入成功"})
-
+        return Response(response_data)
 # --------------------------------
 # First Login: Change password
 # --------------------------------

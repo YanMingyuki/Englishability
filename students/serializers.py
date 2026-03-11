@@ -7,8 +7,13 @@ from django.db.models import Sum
 
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField()
-    password = serializers.CharField()
+    password = serializers.CharField(write_only=True)
 
+class OIDCLoginSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    fullname = serializers.CharField()
+    student_id = serializers.CharField(required=False)
+    role = serializers.CharField()
 
 class ExcelUploadSerializer(serializers.Serializer):
     file = serializers.FileField()
