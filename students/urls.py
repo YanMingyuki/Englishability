@@ -16,7 +16,7 @@ from .views import (
     ForgotPasswordView,
     ImportExamPaperAPIView,
     LoginView,
-    ExcelImportView,
+    # ExcelImportView,
     FirstChangePasswordView,
     MyStudentsView,
     NewsCreateView,
@@ -37,7 +37,7 @@ from .views import (
 urlpatterns = [
     path("login/", LoginView.as_view(), name="login"),
     path("refresh/", TokenRefreshView.as_view(), name="token_refresh"),
-    path("import-excel/", ExcelImportView.as_view(), name="import_excel"),
+    # path("import-excel/", ExcelImportView.as_view(), name="import_excel"),
     path("forget-password/", ForgotPasswordView.as_view(), name="forget_password"),
     path("first-change-password/", FirstChangePasswordView.as_view(), name="first_change_password"),
     path("reset-password/", ResetPasswordView.as_view(), name="reset-password"),

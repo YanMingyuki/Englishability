@@ -23,10 +23,10 @@ from rest_framework_simplejwt.tokens import (RefreshToken,UntypedToken,TokenErro
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from students.services.dashboard_service import get_today_attendance_count, get_today_points, get_total_stars
-from mozilla_django_oidc.auth import OIDCAuthentication
+from mozilla_django_oidc.auth import OIDCAuthenticationBackend
 from rest_framework.exceptions import AuthenticationFailed
 
-from mozilla_django_oidc.views import OIDCAuthenticationRequestView, OIDCCallbackView as BaseOIDCCallbackView
+from mozilla_django_oidc.views import OIDCAuthenticationCallbackView
 
 from .tasks import send_reset_password_email
 
@@ -86,131 +86,153 @@ class LoginView(APIView):
             response_data["student_id"] = student.id if student else None
 
         return Response(response_data)
+# --------------------------------
+# OIDC Login API
+# --------------------------------
 class OIDCLoginView(APIView):
     permission_classes = []
 
     def post(self, request):
-        # 使用 OIDCAuthentication 來驗證 id_token
-        oidc_auth = OIDCAuthentication()
-        user_info = oidc_auth.authenticate(request)
-        
-        if not user_info:
-            raise AuthenticationFailed("無法認證使用者資料")
 
-        # 取得 OIDC 回傳的 id_token 資料
-        user_data = user_info[0]  # User data 包含 email, sub 等資訊
-        user_email = user_data.get("email")
-        user_sub = user_data.get("sub")
-        user_fullname = user_data.get("fullname")
-        user_role = "student" if user_data.get("kh_titles") and "學生" in user_data["kh_titles"].values() else "teacher"
+        backend = OIDCAuthenticationBackend()
 
-        # 查詢資料庫中的 UserAccount
-        if user_role == "student":
-            user = UserAccount.objects.filter(username=user_sub).first()
-        else:
-            user = UserAccount.objects.filter(email=user_email).first()
-        
+        # authenticate 會回傳 Django user
+        user = backend.authenticate(request)
+
         if not user:
-            # 若使用者不存在，創建新使用者
+            raise AuthenticationFailed("無法認證使用者")
+
+        user_email = getattr(user, "email", None)
+        user_sub = getattr(user, "username", None)
+        user_fullname = getattr(user, "first_name", "")
+
+        # 預設 teacher
+        user_role = "teacher"
+
+        # 如果 request 裡有 OIDC userinfo
+        userinfo = request.session.get("oidc_userinfo", {})
+
+        if userinfo:
+            kh_titles = userinfo.get("kh_titles", {})
+
+            if kh_titles and "學生" in kh_titles.values():
+                user_role = "student"
+
+        # -------------------------
+        # 查找 user
+        # -------------------------
+        if user_role == "student":
+            db_user = UserAccount.objects.filter(username=user_sub).first()
+        else:
+            db_user = UserAccount.objects.filter(email=user_email).first()
+
+        # -------------------------
+        # 建立 user
+        # -------------------------
+        if not db_user:
+
+            db_user = UserAccount.objects.create(
+                username=user_sub,
+                email=user_email,
+                role=user_role,
+                first_login=True,
+            )
+
             if user_role == "student":
-                user = UserAccount.objects.create(
-                    username=user_sub,
-                    email=user_email,
-                    role=user_role,
-                    first_login=True,
-                )
-            else:
-                user = UserAccount.objects.create(
-                    username=user_sub,
-                    email=user_email,
-                    role=user_role,
-                    first_login=True,
+
+                Student.objects.create(
+                    user=db_user,
+                    student_id=user_sub,
+                    student_name=user_fullname,
+                    school_name="未知學校",
+                    school_type="未知類型"
                 )
 
-        # 根據 role 判斷角色資料
-        if user_role == "student":
-            student = Student.objects.create(
-                user=user,
-                student_id=user_sub,
-                student_name=user_fullname,
-                school_name="學校名稱",  # 假設學校名稱會在 OIDC 中回傳
-                school_type="學校類型"   # 假設學校類型會在 OIDC 中回傳
-            )
-        elif user_role == "teacher":
-            teacher = Teacher.objects.create(
-                user=user,
-                teacher_name=user_fullname,
-                school_name="學校名稱",  # 假設學校名稱會在 OIDC 中回傳
-                school_type="學校類型"   # 假設學校類型會在 OIDC 中回傳
-            )
-        
-        # 創建 access token 和 refresh token
-        refresh = CustomRefreshToken.for_user(user)
+            else:
+
+                Teacher.objects.create(
+                    user=db_user,
+                    teacher_name=user_fullname,
+                    school_name="未知學校",
+                    school_type="未知類型"
+                )
+
+        # -------------------------
+        # JWT Token
+        # -------------------------
+        refresh = CustomRefreshToken.for_user(db_user)
 
         response_data = {
             "access": str(refresh.access_token),
             "refresh": str(refresh),
-            "role": user.role,
-            "first_login": user.first_login,
+            "role": db_user.role,
+            "first_login": db_user.first_login,
         }
 
-        # 若為學生，返回 student_id
-        if user.role == "student":
-            response_data["student_id"] = user_sub  # 使用者的 sub 作為學生 ID
+        if db_user.role == "student":
+            response_data["student_id"] = user_sub
 
         return Response(response_data)
-    
-class OIDCCallbackView(BaseOIDCCallbackView):
-    """
-    處理 OIDC 回調，解析 token 並將用戶登入。
-    """
-    def post(self, request, *args, **kwargs):
-        # 確保 OIDC 登入成功，並返回用戶資料
-        user_info = self.get_user_info_from_oidc(request)
 
-        if not user_info:
+
+# --------------------------------
+# OIDC Callback
+# --------------------------------
+class OIDCCallbackView(OIDCAuthenticationCallbackView):
+    """
+    OIDC 登入 callback
+    """
+
+    def get(self, request, *args, **kwargs):
+
+        user = request.user
+
+        if not user.is_authenticated:
             raise AuthenticationFailed("OIDC 認證失敗")
 
-        # 這邊處理登入邏輯，例如創建或查詢 UserAccount 資料
-        user_data = user_info[0]  # User data 包含 email, sub 等資訊
-        user_email = user_data.get("email")
-        user_sub = user_data.get("sub")
-        user_fullname = user_data.get("fullname")
-        user_role = "student" if "學生" in user_data.get("kh_titles", {}).values() else "teacher"
+        user_email = user.email
+        user_sub = user.username
+        user_fullname = user.first_name
 
-        # 查詢資料庫中的 UserAccount
-        user = UserAccount.objects.filter(username=user_sub).first() if user_role == "student" else UserAccount.objects.filter(email=user_email).first()
-        
-        if not user:
-            # 若使用者不存在，創建新使用者
-            if user_role == "student":
-                user = UserAccount.objects.create(
-                    username=user_sub,
-                    email=user_email,
-                    role=user_role,
-                    first_login=True,
-                )
-            else:
-                user = UserAccount.objects.create(
-                    username=user_sub,
-                    email=user_email,
-                    role=user_role,
-                    first_login=True,
-                )
+        userinfo = request.session.get("oidc_userinfo", {})
+        kh_titles = userinfo.get("kh_titles", {})
 
-        # 創建 Access Token 和 Refresh Token
-        refresh = CustomRefreshToken.for_user(user)
+        user_role = "student" if "學生" in kh_titles.values() else "teacher"
+
+        # -------------------------
+        # 查找 user
+        # -------------------------
+        if user_role == "student":
+            db_user = UserAccount.objects.filter(username=user_sub).first()
+        else:
+            db_user = UserAccount.objects.filter(email=user_email).first()
+
+        # -------------------------
+        # 建立 user
+        # -------------------------
+        if not db_user:
+
+            db_user = UserAccount.objects.create(
+                username=user_sub,
+                email=user_email,
+                role=user_role,
+                first_login=True,
+            )
+
+        # -------------------------
+        # JWT token
+        # -------------------------
+        refresh = CustomRefreshToken.for_user(db_user)
 
         response_data = {
             "access": str(refresh.access_token),
             "refresh": str(refresh),
-            "role": user.role,
-            "first_login": user.first_login,
+            "role": db_user.role,
+            "first_login": db_user.first_login,
         }
 
-        # 若為學生，返回 student_id
-        if user.role == "student":
-            response_data["student_id"] = user_sub  # 使用者的 sub 作為學生 ID
+        if db_user.role == "student":
+            response_data["student_id"] = user_sub
 
         return Response(response_data)
 # --------------------------------
