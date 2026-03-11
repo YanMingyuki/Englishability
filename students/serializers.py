@@ -1,7 +1,8 @@
 # accounts/serializers.py
 
 from rest_framework import serializers
-from .models import ExamOption, ExamPaper, ExamQuestion, StudentAchievement, TestRecord, UserAccount, Teacher, Student, Class
+from .models import ExamOption, ExamPaper, ExamQuestion, League, News, StudentAchievement, TestRecord, UserAccount, Teacher, Student, Class
+from django.db.models import Sum
 
 
 class LoginSerializer(serializers.Serializer):
@@ -181,4 +182,108 @@ class StudentAchievementSerializer(serializers.ModelSerializer):
         model = StudentAchievement
         fields = ["name", "completed_at"]    
     
+class StudentDetailSerializer(serializers.ModelSerializer):
+    total_stars = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Student
+        fields = [
+            "id",
+            "student_name",
+            "student_id",
+            "total_stars"
+        ]
+
+    def get_total_stars(self, obj):
+        return TestRecord.objects.filter(
+            student=obj
+        ).aggregate(total=Sum("stars"))["total"] or 0
+        
+class ClassDetailSerializer(serializers.ModelSerializer):
+    students = StudentDetailSerializer(many=True, read_only=True)
+    student_total = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Class
+        fields = [
+            "id",
+            "grade",
+            "classroom",
+            "student_total",
+            "students"
+        ]
+
+    def get_student_total(self, obj):
+        return obj.students.count()
+
+class SchoolSummarySerializer(serializers.Serializer):
+    class_total = serializers.IntegerField()
+    student_total = serializers.IntegerField()
+    today_participation = serializers.IntegerField()
+    today_total_points = serializers.IntegerField()
+    total_stars = serializers.IntegerField()
     
+class ClassListSerializer(serializers.ModelSerializer):
+    student_total = serializers.IntegerField()
+    total_stars = serializers.IntegerField()
+
+    class Meta:
+        model = Class
+        fields = [
+            "id",
+            "grade",
+            "classroom",
+            "student_total",
+            "total_stars"
+        ]
+
+class SchoolListSerializer(serializers.Serializer):
+    school_name = serializers.CharField()
+    student_total = serializers.IntegerField()
+    total_stars = serializers.IntegerField()
+    
+class LeagueListSerializer(serializers.ModelSerializer):
+    school_total = serializers.IntegerField()
+    student_total = serializers.IntegerField()
+    total_stars = serializers.IntegerField()
+
+    class Meta:
+        model = League
+        fields = [
+            "id",
+            "league_name",
+            "school_total",
+            "student_total",
+            "total_stars"
+        ]
+        
+class StudentSimpleSerializer(serializers.ModelSerializer):
+    total_stars = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Student
+        fields = [
+            "id",
+            "student_name",
+            "student_id",
+            "total_stars"
+        ]
+
+    def get_total_stars(self, obj):
+        return TestRecord.objects.filter(
+            student=obj
+        ).aggregate(total=Sum("stars"))["total"] or 0
+
+class ExamStatsSerializer(serializers.Serializer):
+    exam_id = serializers.IntegerField()
+    exam_name = serializers.CharField()
+    total_participants = serializers.IntegerField()
+    avg_score = serializers.FloatField()
+    highest_score = serializers.IntegerField()
+    lowest_score = serializers.IntegerField()
+
+class NewsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = News
+        fields = '__all__'
+

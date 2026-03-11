@@ -267,3 +267,17 @@ class StudentAchievement(models.Model):
 
     def __str__(self):
         return f"{self.student} - {self.name}"
+    
+class News(models.Model):
+
+    title = models.CharField(max_length=255, verbose_name="標題")
+    category = models.CharField(max_length=50, verbose_name="類別")
+    content = models.TextField(verbose_name="內容")
+    date = models.DateField(verbose_name="日期")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-date']
+
+    def __str__(self):
+        return self.title

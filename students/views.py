@@ -5,13 +5,14 @@ import pandas as pd
 from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
 from django.db import transaction
-from django.db.models import Sum
+from django.db.models import Avg, Count, Max, Min, Sum
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.timezone import make_aware
+from rest_framework.parsers import JSONParser
 
-from rest_framework import status
+from rest_framework import status,viewsets
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -21,6 +22,8 @@ from rest_framework_simplejwt.tokens import (RefreshToken,UntypedToken,TokenErro
 
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
+from students.services.dashboard_service import get_today_attendance_count, get_today_points, get_total_stars
+
 
 from .tasks import send_reset_password_email
 
@@ -29,9 +32,9 @@ from .tokens import CustomRefreshToken, IsStudent
 from students.scope import DataScopeService
 from students.statistics import StudentStatisticsService
 
-from .models import (Attendance,Class,CompetitionScore,ExamAnswerRecord, ExamOption,ExamPaper,ExamPart,ExamQuestion,ExamRecord,League,Student, StudentAchievement,Teacher, TestRecord, UserAccount,)
+from .models import (Attendance,Class,CompetitionScore,ExamAnswerRecord, ExamOption,ExamPaper,ExamPart,ExamQuestion,ExamRecord,League, News,Student, StudentAchievement,Teacher, TestRecord, UserAccount,)
 
-from .serializers import (ClassDashboardSerializer, ExamPaperImportSerializer,ExamPaperRetrieveSerializer,ExamSubmitSerializer,FirstChangePasswordSerializer,ForgotPasswordSerializer,LoginSerializer, ResetPasswordSerializer, StudentAchievementCreateSerializer, StudentAchievementSerializer,StudentOutputSerializer,)
+from .serializers import (ClassDashboardSerializer, ClassDetailSerializer, ClassListSerializer, ExamPaperImportSerializer,ExamPaperRetrieveSerializer, ExamStatsSerializer,ExamSubmitSerializer,FirstChangePasswordSerializer,ForgotPasswordSerializer, LeagueListSerializer,LoginSerializer, NewsSerializer, ResetPasswordSerializer, SchoolListSerializer, StudentAchievementCreateSerializer, StudentAchievementSerializer,StudentOutputSerializer,)
 
 logger = logging.getLogger(__name__)
 DEFAULT_PASSWORD = "ENpassword123"  # 統一預設密碼
@@ -80,6 +83,7 @@ class LoginView(APIView):
             response_data["student_id"] = student.id if student else None
 
         return Response(response_data)
+
 # --------------------------------
 # Excel Import API
 # --------------------------------
@@ -290,7 +294,6 @@ class MyStudentsView(APIView):
 
         serializer = StudentOutputSerializer(students, many=True)
         return Response(serializer.data)
-
 
 class ForgotPasswordView(APIView):
     permission_classes = []
@@ -1358,7 +1361,6 @@ class DashboardClassAPIView(APIView):
             classes = scope.get_classes()
             school_map = {}
             for cls in classes:
-                # 班級學生總計
                 students = cls.students.all()
                 total_attendance = sum(StudentStatisticsService(s).attendance_days() for s in students)
                 total_weekly_score = sum(StudentStatisticsService(s).weekly_competition_score() for s in students)
@@ -1382,21 +1384,23 @@ class DashboardClassAPIView(APIView):
                 }
                 for school_name, classes in school_map.items()
             ]
+
         # =========================
         # union_leader（學校總計）
         # =========================
         elif user.role == "union_leader":
-            leagues = scope.get_my_leagues()  # 已經拿到召集人自己聯盟下的所有 League
+            leagues = scope.get_my_leagues()  # 取得該聯盟內包含自己學校的所有 League
 
-            # 用字典聚合
             league_map = {}
 
             for league in leagues:
-                # 初始化該聯盟
+                # 防呆：確認 league 存在且有 school_name
+                if not league or not getattr(league, "school_name", None):
+                    continue
+
                 if league.league_name not in league_map:
                     league_map[league.league_name] = []
 
-                # 每筆 League 代表一所學校
                 school_name = league.school_name
                 stats = StudentStatisticsService.get_school_total(school_name)
 
@@ -1407,7 +1411,6 @@ class DashboardClassAPIView(APIView):
                     "total_stars": stats["total_stars"],
                 })
 
-            # 轉成列表回傳
             response_data = [
                 {
                     "league_name": league_name,
@@ -1416,13 +1419,11 @@ class DashboardClassAPIView(APIView):
                 for league_name, schools in league_map.items()
             ]
 
-            return Response(response_data)
-
         # =========================
         # global_leader（聯盟 → 學校總計）
         # =========================
         elif user.role == "global_leader":
-            leagues = scope.get_all_leagues()
+            leagues = scope.get_my_leagues()
 
             for league in leagues:
                 league_data = {
@@ -1447,6 +1448,7 @@ class DashboardClassAPIView(APIView):
                     })
 
                 response_data.append(league_data)
+
         return Response(response_data)
 
 class StudentDetailDashboardAPIView(APIView):
@@ -1579,4 +1581,803 @@ class StudentAchievementListAPIView(APIView):
         serializer = StudentAchievementSerializer(achievements, many=True)
         return Response(serializer.data)
 
+#Dashboard View
+class DashboardSummaryView(APIView):
+    permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_summary="Dashboard 總覽",
+        operation_description="""
+依使用者角色回傳不同層級統計資料：
+
+- school_admin → 學校統計
+- union_leader → 聯盟統計
+- global_leader → 全系統統計
+        """,
+        manual_parameters=[
+            openapi.Parameter(
+                "date",
+                openapi.IN_QUERY,
+                description="指定統計日期 (YYYY-MM-DD)",
+                type=openapi.TYPE_STRING,
+                format=openapi.FORMAT_DATE,
+                required=False
+            )
+        ],
+        responses={
+            200: openapi.Response(
+                description="成功取得 Dashboard 統計資料",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        "class_total": openapi.Schema(type=openapi.TYPE_INTEGER),
+                        "school_total": openapi.Schema(type=openapi.TYPE_INTEGER),
+                        "league_total": openapi.Schema(type=openapi.TYPE_INTEGER),
+                        "student_total": openapi.Schema(type=openapi.TYPE_INTEGER),
+                        "today_participation": openapi.Schema(type=openapi.TYPE_INTEGER),
+                        "total_stars": openapi.Schema(type=openapi.TYPE_INTEGER),
+                        "competition_total_score": openapi.Schema(type=openapi.TYPE_INTEGER),
+                        "today_competition_participants": openapi.Schema(type=openapi.TYPE_INTEGER),
+                    }
+                )
+            ),
+            403: openapi.Response(description="無權限"),
+        },
+        tags=["dashboard"]
+    )
+    def get(self, request):
+        role = request.user.role
+        date_str = request.query_params.get("date")
+        today = datetime.strptime(date_str, "%Y-%m-%d").date() if date_str else timezone.localdate()
+
+        # -------------------------------
+        # School Admin
+        # -------------------------------
+        if role == "school_admin":
+            school_name = request.user.teacher.school_name
+            students = Student.objects.filter(school_name=school_name)
+
+            # 競技積分統計
+            competition_qs = CompetitionScore.objects.filter(student__in=students)
+            competition_total_score = competition_qs.filter(time__date=today).aggregate(total=Sum("score"))["total"] or 0
+            today_competition_participants = competition_qs.filter(time__date=today).values("student").distinct().count()
+
+            data = {
+                "class_total": Class.objects.filter(school_name=school_name).count(),
+                "student_total": students.count(),
+                "today_participation": get_today_attendance_count(students),
+                "total_stars": get_total_stars(students),
+                "competition_total_score": competition_total_score,
+                "today_competition_participants": today_competition_participants,
+            }
+            return Response(data)
+        # -------------------------------
+        # Union Leader
+        # -------------------------------
+        elif role == "union_leader":
+            teacher_school = request.user.teacher.school_name
+            leagues = League.objects.filter(school_name=teacher_school)
+            if not leagues.exists():
+                return Response({"detail": "找不到對應聯盟資料"}, status=404)
+
+            total_students = 0
+            total_stars = 0
+            competition_total_score = 0
+            today_competition_participants = 0
+            today_participation = 0
+
+            for league in leagues:
+                students = Student.objects.filter(school_name=league.school_name)
+                student_ids = students.values_list("id", flat=True)
+
+                total_students += students.count()
+                total_stars += get_total_stars(students)
+                today_participation += get_today_attendance_count(students)
+
+                # 🔹 競技統計
+                comp_qs = CompetitionScore.objects.filter(student__in=student_ids)
+                competition_total_score += comp_qs.filter(time__date=today).aggregate(total=Sum("score"))["total"] or 0
+                today_competition_participants += comp_qs.filter(time__date=today).values("student").distinct().count()
+
+            data = {
+                "school_total": leagues.count(),
+                "student_total": total_students,
+                "total_stars": total_stars,
+                "competition_total_score": competition_total_score,
+                "today_competition_participants": today_competition_participants,
+                "today_participation": today_participation,  # ✅ 新增今天簽到人數
+            }
+            return Response(data)
+
+        # -------------------------------
+        # Global Leader
+        # -------------------------------
+        elif role == "global_leader":
+            students = Student.objects.all()
+            student_ids = students.values_list("id", flat=True)
+
+            today_participation = get_today_attendance_count(students)
+
+            comp_qs = CompetitionScore.objects.filter(student__in=student_ids)
+            competition_total_score = comp_qs.aggregate(total=Sum("score"))["total"] or 0
+            today_competition_participants = comp_qs.filter(time__date=today).values("student").distinct().count()
+
+            data = {
+                "league_total": League.objects.count(),
+                "school_total": students.values("school_name").distinct().count(),
+                "student_total": students.count(),
+                "total_stars": get_total_stars(students),
+                "competition_total_score": competition_total_score,
+                "today_competition_participants": today_competition_participants,
+                "today_participation": today_participation,  # ✅ 新增今天簽到人數
+            }
+            return Response(data)
+
+        return Response({"detail": "無權限"}, status=403)
+#SchoolDetailView
+class SchoolDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary="取得學校詳細資料",
+        operation_description="僅 school_admin 可使用，回傳班級與學生明細",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                "school_name": openapi.Schema(type=openapi.TYPE_STRING, description="學校名稱（選填，預設使用登入者學校）")
+            }
+        ),
+        responses={
+            200: openapi.Response(
+                description="成功取得學校詳細資料",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_ARRAY,
+                    items=openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        properties={
+                            "id": openapi.Schema(type=openapi.TYPE_INTEGER),
+                            "grade": openapi.Schema(type=openapi.TYPE_INTEGER),
+                            "classroom": openapi.Schema(type=openapi.TYPE_STRING),
+                            "students": openapi.Schema(
+                                type=openapi.TYPE_ARRAY,
+                                items=openapi.Schema(
+                                    type=openapi.TYPE_OBJECT,
+                                    properties={
+                                        "id": openapi.Schema(type=openapi.TYPE_INTEGER),
+                                        "student_name": openapi.Schema(type=openapi.TYPE_STRING),
+                                        "student_id": openapi.Schema(type=openapi.TYPE_STRING),
+                                        "total_stars": openapi.Schema(type=openapi.TYPE_INTEGER),
+                                    }
+                                )
+                            )
+                        }
+                    )
+                )
+            ),
+            403: openapi.Response(description="無權限"),
+            400: openapi.Response(description="缺少 school_name 或無效"),
+        },
+        tags=["dashboard"]
+    )
+    def post(self, request):
+        if request.user.role != "school_admin":
+            return Response({"detail": "無權限"}, status=403)
+
+        # 可選擇傳 school_name，若未傳則使用登入者學校
+        school_name = request.data.get("school_name") or getattr(request.user.teacher, "school_name", None)
+        if not school_name:
+            return Response({"detail": "無法取得學校名稱"}, status=400)
+
+        # 確保 school_admin 只能存取自己學校
+        if request.user.teacher.school_name != school_name:
+            return Response({"detail": "無權限存取其他學校"}, status=403)
+
+        classes = Class.objects.filter(school_name=school_name)
+        serializer = ClassDetailSerializer(classes, many=True)
+        return Response(serializer.data)
+    
+#DashboardListView
+class DashboardListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary="Dashboard 下一層列表",
+        tags=["dashboard"]
+    )
+    def get(self, request):
+
+        role = request.user.role
+        date_str = request.query_params.get("date")
+
+        today = datetime.strptime(
+            date_str,
+            "%Y-%m-%d"
+        ).date() if date_str else timezone.localdate()
+
+        # =================================
+        # School Admin
+        # =================================
+        if role == "school_admin":
+
+            school_name = request.user.teacher.school_name
+
+            classes = Class.objects.filter(
+                school_name=school_name
+            ).distinct()
+
+            results = []
+
+            for c in classes:
+
+                students = c.students.all().distinct()
+                student_ids = students.values_list("id", flat=True)
+
+                today_participation = get_today_attendance_count(students)
+
+                total_stars = TestRecord.objects.filter(
+                    student_id__in=student_ids
+                ).aggregate(total=Sum("stars"))["total"] or 0
+
+                comp_qs = CompetitionScore.objects.filter(
+                    student_id__in=student_ids,
+                    time__date=today
+                )
+
+                competition_total_score = comp_qs.aggregate(
+                    total=Sum("score")
+                )["total"] or 0
+
+                today_competition_participants = comp_qs.values(
+                    "student"
+                ).distinct().count()
+
+                results.append({
+                    "id": c.id,
+                    "grade": c.grade,
+                    "classroom": c.classroom,
+                    "student_total": students.count(),
+                    "today_participation": today_participation,
+                    "total_stars": total_stars,
+                    "competition_total_score": competition_total_score,
+                    "today_competition_participants": today_competition_participants
+                })
+
+            return Response({
+                "level": "class",
+                "results": results
+            })
+
+        # =================================
+        # Union Leader
+        # =================================
+        elif role == "union_leader":
+
+            teacher_school = request.user.teacher.school_name
+
+            leagues = League.objects.filter(
+                school_name=teacher_school
+            ).distinct()
+
+            if not leagues.exists():
+                return Response(
+                    {"detail": "找不到對應聯盟資料"},
+                    status=404
+                )
+
+            results = []
+
+            for league in leagues:
+
+                school_name = league.school_name
+
+                students = Student.objects.filter(
+                    school_name=school_name
+                ).distinct()
+
+                student_ids = students.values_list("id", flat=True)
+
+                today_participation = get_today_attendance_count(students)
+
+                total_stars = TestRecord.objects.filter(
+                    student_id__in=student_ids
+                ).aggregate(total=Sum("stars"))["total"] or 0
+
+                comp_qs = CompetitionScore.objects.filter(
+                    student_id__in=student_ids,
+                    time__date=today
+                )
+
+                competition_total_score = comp_qs.aggregate(
+                    total=Sum("score")
+                )["total"] or 0
+
+                today_competition_participants = comp_qs.values(
+                    "student"
+                ).distinct().count()
+
+                results.append({
+                    "id": league.id,
+                    "school_name": school_name,
+                    "student_total": students.count(),
+                    "today_participation": today_participation,
+                    "total_stars": total_stars,
+                    "competition_total_score": competition_total_score,
+                    "today_competition_participants": today_competition_participants
+                })
+
+            return Response({
+                "level": "school",
+                "results": results
+            })
+
+        # =================================
+        # Global Leader
+        # =================================
+        elif role == "global_leader":
+
+            league_names = League.objects.values_list(
+                "league_name",
+                flat=True
+            ).distinct()
+
+            results = []
+
+            for league_name in league_names:
+
+                schools = League.objects.filter(
+                    league_name=league_name
+                ).values_list(
+                    "school_name",
+                    flat=True
+                ).distinct()
+
+                school_results = []
+
+                for school in schools:
+
+                    students = Student.objects.filter(
+                        school_name=school
+                    ).distinct()
+
+                    student_ids = students.values_list("id", flat=True)
+
+                    today_participation = get_today_attendance_count(students)
+
+                    total_stars = TestRecord.objects.filter(
+                        student_id__in=student_ids
+                    ).aggregate(total=Sum("stars"))["total"] or 0
+
+                    comp_qs = CompetitionScore.objects.filter(
+                        student_id__in=student_ids,
+                        time__date=today
+                    )
+
+                    competition_total_score = comp_qs.aggregate(
+                        total=Sum("score")
+                    )["total"] or 0
+
+                    today_competition_participants = comp_qs.values(
+                        "student"
+                    ).distinct().count()
+
+                    school_results.append({
+                        "school_name": school,
+                        "student_total": students.count(),
+                        "today_participation": today_participation,
+                        "total_stars": total_stars,
+                        "competition_total_score": competition_total_score,
+                        "today_competition_participants": today_competition_participants
+                    })
+
+                league_students = Student.objects.filter(
+                    school_name__in=schools
+                ).distinct()
+
+                results.append({
+                    "league_name": league_name,
+                    "school_total": len(schools),
+                    "student_total": league_students.count(),
+                    "schools": school_results
+                })
+
+            return Response({
+                "level": "league",
+                "results": results
+            })
+
+        return Response({"detail": "無權限"}, status=403)
+ 
+#ClassDetailView
+class ClassDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary="取得班級詳細資料",
+        operation_description="僅 school_admin 可使用，包含學生與星數",
+        manual_parameters=[
+            openapi.Parameter(
+                "id",
+                openapi.IN_PATH,
+                description="班級 ID",
+                type=openapi.TYPE_INTEGER,
+                required=True
+            )
+        ],
+        responses={
+            200: openapi.Response(
+                description="成功取得班級資料",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        "id": openapi.Schema(type=openapi.TYPE_INTEGER),
+                        "grade": openapi.Schema(type=openapi.TYPE_INTEGER),
+                        "classroom": openapi.Schema(type=openapi.TYPE_STRING),
+                        "students": openapi.Schema(
+                            type=openapi.TYPE_ARRAY,
+                            items=openapi.Schema(
+                                type=openapi.TYPE_OBJECT,
+                                properties={
+                                    "id": openapi.Schema(type=openapi.TYPE_INTEGER),
+                                    "student_name": openapi.Schema(type=openapi.TYPE_STRING),
+                                    "student_id": openapi.Schema(type=openapi.TYPE_STRING),
+                                    "total_stars": openapi.Schema(type=openapi.TYPE_INTEGER),
+                                }
+                            )
+                        )
+                    }
+                )
+            ),
+            404: openapi.Response(description="找不到班級"),
+            403: openapi.Response(description="無權限"),
+        },
+        tags=["dashboard"]
+    )
+    def get(self, request, id):
+
+        if request.user.role != "school_admin":
+            return Response({"detail": "無權限"}, status=403)
+
+        try:
+            classroom = Class.objects.get(id=id)
+        except Class.DoesNotExist:
+            return Response({"detail": "找不到班級"}, status=404)
+
+        serializer = ClassDetailSerializer(classroom)
+        return Response(serializer.data)
+    
+class ExamStatsView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser]
+
+    # =============================
+    # 聯盟取得
+    # =============================
+    def get_my_leagues(self):
+
+        if self.request.user.role != "union_leader":
+            return League.objects.none()
+
+        teacher = getattr(self.request.user, "teacher", None)
+
+        if not teacher:
+            return League.objects.none()
+
+        return League.objects.filter(
+            school_name=teacher.school_name
+        ).distinct()
+
+    # =============================
+    # 分數區間
+    # =============================
+    def get_score_distribution(self, records):
+
+        buckets = {f"{i}-{i+9}": 0 for i in range(0, 100, 10)}
+        buckets["100"] = 0
+
+        for score in records.values_list("score", flat=True):
+
+            if score == 100:
+                buckets["100"] += 1
+
+            else:
+                start = (score // 10) * 10
+                key = f"{start}-{start+9}"
+                buckets[key] += 1
+
+        return buckets
+
+    # =============================
+    # Swagger
+    # =============================
+    @swagger_auto_schema(
+        operation_summary="取得試卷統計資料",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["exam_id"],
+            properties={
+                "exam_id": openapi.Schema(type=openapi.TYPE_INTEGER)
+            }
+        ),
+        tags=["dashboard"]
+    )
+
+    def post(self, request):
+
+        exam_id = request.data.get("exam_id")
+
+        if not exam_id:
+            return Response({"detail": "缺少 exam_id"}, status=400)
+
+        try:
+            exam = ExamPaper.objects.get(id=exam_id)
+
+        except ExamPaper.DoesNotExist:
+            return Response({"detail": "找不到試卷"}, status=404)
+
+        role = request.user.role
+
+        # ====================================================
+        # school_admin
+        # ====================================================
+        if role == "school_admin":
+            school_name = request.user.teacher.school_name
+
+            students = Student.objects.filter(school_name=school_name).distinct()
+            student_ids = students.values_list("id", flat=True)
+
+            all_records = ExamRecord.objects.filter(
+                exam_paper=exam,
+                student_id__in=student_ids
+            ).select_related("student")
+
+            total_avg = all_records.aggregate(avg_score=Avg("score"))["avg_score"] or 0
+
+            classes = Class.objects.filter(school_name=school_name).distinct()
+            class_results = []
+
+            for c in classes:
+                class_students = c.students.all().distinct()
+                class_student_ids = class_students.values_list("id", flat=True)
+
+                records = all_records.filter(student_id__in=class_student_ids)
+
+                stats = records.aggregate(
+                    avg_score=Avg("score"),
+                    highest_score=Max("score"),
+                    lowest_score=Min("score")
+                )
+
+                # 每班學生明細
+                student_results = [
+                    {"student_id": r.student.id,
+                     "student_name": r.student.student_name,
+                     "score": r.score
+                     }
+                    for r in records
+                ]
+
+                class_results.append({
+                    "class_id": c.id,
+                    "grade": c.grade,
+                    "classroom": c.classroom,
+                    "avg_score": round(stats["avg_score"] or 0, 2),
+                    "participants": records.values("student").distinct().count(),
+                    "highest_score": stats["highest_score"] or 0,
+                    "lowest_score": stats["lowest_score"] or 0,
+                    "score_distribution": self.get_score_distribution(records),
+                    "students": student_results
+                })
+
+            return Response({
+                "total_avg_score": round(total_avg, 2),
+                "participants": all_records.values("student").distinct().count(),
+                "score_distribution": self.get_score_distribution(all_records),
+                "classes": class_results
+            })
+
+        # ====================================================
+        # union_leader
+        # ====================================================
+        elif role == "union_leader":
+
+            my_leagues = self.get_my_leagues()
+
+            result = []
+
+            for league in my_leagues:
+
+                schools = League.objects.filter(
+                    league_name=league.league_name
+                ).values_list(
+                    "school_name",
+                    flat=True
+                ).distinct()
+
+                school_stats = []
+
+                for school in schools:
+
+                    students = Student.objects.filter(
+                        school_name=school
+                    ).distinct()
+
+                    student_ids = students.values_list("id", flat=True)
+
+                    records = ExamRecord.objects.filter(
+                        exam_paper=exam,
+                        student_id__in=student_ids
+                    )
+
+                    avg_score = records.aggregate(
+                        avg_score=Avg("score")
+                    )["avg_score"] or 0
+
+                    school_stats.append({
+                        "school_name": school,
+                        "avg_score": round(avg_score, 2),
+                        "participants": records.values("student").distinct().count(),
+                        "score_distribution": self.get_score_distribution(records)
+                    })
+
+                all_students = Student.objects.filter(
+                    school_name__in=schools
+                ).distinct()
+
+                all_records = ExamRecord.objects.filter(
+                    exam_paper=exam,
+                    student_id__in=all_students.values_list("id", flat=True)
+                )
+
+                league_avg = all_records.aggregate(
+                    avg_score=Avg("score")
+                )["avg_score"] or 0
+
+                result.append({
+                    "league_name": league.league_name,
+                    "league_avg_score": round(league_avg, 2),
+                    "participants": all_records.values("student").distinct().count(),
+                    "score_distribution": self.get_score_distribution(all_records),
+                    "schools": school_stats
+                })
+
+            return Response(result)
+
+        # ====================================================
+        # global_leader
+        # ====================================================
+        elif role == "global_leader":
+
+            league_names = League.objects.values_list(
+                "league_name",
+                flat=True
+            ).distinct()
+
+            result = []
+
+            for league_name in league_names:
+
+                schools = League.objects.filter(
+                    league_name=league_name
+                ).values_list(
+                    "school_name",
+                    flat=True
+                ).distinct()
+
+                school_stats = []
+
+                for school in schools:
+
+                    students = Student.objects.filter(
+                        school_name=school
+                    ).distinct()
+
+                    student_ids = students.values_list("id", flat=True)
+
+                    records = ExamRecord.objects.filter(
+                        exam_paper=exam,
+                        student_id__in=student_ids
+                    )
+
+                    avg_score = records.aggregate(
+                        avg_score=Avg("score")
+                    )["avg_score"] or 0
+
+                    school_stats.append({
+                        "school_name": school,
+                        "avg_score": round(avg_score, 2),
+                        "participants": records.values("student").distinct().count(),
+                        "score_distribution": self.get_score_distribution(records)
+                    })
+
+                all_students = Student.objects.filter(
+                    school_name__in=schools
+                ).distinct()
+
+                all_records = ExamRecord.objects.filter(
+                    exam_paper=exam,
+                    student_id__in=all_students.values_list("id", flat=True)
+                )
+
+                league_avg = all_records.aggregate(
+                    avg_score=Avg("score")
+                )["avg_score"] or 0
+
+                result.append({
+                    "league_name": league_name,
+                    "league_avg_score": round(league_avg, 2),
+                    "participants": all_records.values("student").distinct().count(),
+                    "score_distribution": self.get_score_distribution(all_records),
+                    "schools": school_stats
+                })
+
+            all_students = Student.objects.all().distinct()
+
+            all_records = ExamRecord.objects.filter(
+                exam_paper=exam,
+                student_id__in=all_students.values_list("id", flat=True)
+            )
+
+            global_avg = all_records.aggregate(
+                avg_score=Avg("score")
+            )["avg_score"] or 0
+
+            return Response({
+                "global_avg_score": round(global_avg, 2),
+                "participants": all_records.values("student").distinct().count(),
+                "score_distribution": self.get_score_distribution(all_records),
+                "leagues": result
+            })
+
+        return Response({"detail": "無權限"}, status=403)
+
+class NewsListView(APIView):
+
+    @swagger_auto_schema(
+        operation_summary="取得最新消息列表",
+        tags=["News"]
+    )
+    def get(self, request):
+        news = News.objects.all().order_by("-created_at")
+        serializer = NewsSerializer(news, many=True)
+        return Response(serializer.data)
+
+class NewsCreateView(APIView):
+
+    @swagger_auto_schema(
+        operation_summary="新增最新消息",
+        request_body=NewsSerializer,
+        tags=["News"]
+    )
+    def post(self, request):
+        serializer = NewsSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+    
+class NewsUpdateView(APIView):
+
+    @swagger_auto_schema(
+        operation_summary="更新最新消息",
+        request_body=NewsSerializer,
+        tags=["News"]
+    )
+    def put(self, request, pk):
+        news = get_object_or_404(News, pk=pk)
+        serializer = NewsSerializer(news, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+class NewsDeleteView(APIView):
+
+    @swagger_auto_schema(
+        operation_summary="刪除最新消息",
+        tags=["News"]
+    )
+    def delete(self, request, pk):
+        news = get_object_or_404(News, pk=pk)
+        news.delete()
+        return Response({"message": "deleted"}) 
+    
+    
+    

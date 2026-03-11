@@ -34,14 +34,18 @@ class DataScopeService:
     # union_leader：自己的聯盟
     # =========================
     def get_my_leagues(self):
+        """
+        union_leader：回傳自己聯盟內包含自己學校的所有 League
+        """
         if self.role != "union_leader":
             return League.objects.none()
 
-        teacher = self.user.teacher
-        return League.objects.filter(
-            convener=teacher.school_name,
-            school_type=teacher.school_type
-        )
+        teacher = getattr(self.user, "teacher", None)
+        if not teacher:
+            return League.objects.none()
+
+        # 用 teacher 的 school_name 過濾
+        return League.objects.filter(school_name=teacher.school_name)
 
     # =========================
     # global_leader 可視聯盟
