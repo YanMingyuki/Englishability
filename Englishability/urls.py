@@ -26,6 +26,13 @@ urlpatterns = [
     path('api/questionbank/', include('questionbank.urls')),
     path('api/students/', include('students.urls')), 
     path('api/swagger/', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),
-    path('api/oidclogin/', OIDCLoginView.as_view(), name='oidc-login'),
-    path('api/oidccallback/', OIDCCallbackView.as_view(), name='oidc-callback'),
+    # OIDC
+    path("api/oidc/", include("mozilla_django_oidc.urls")),
+
+    # callback
+    path(
+        "api/oidccallback/",
+        OIDCCallbackView.as_view(),
+        name="oidc_callback"
+    ),
 ]

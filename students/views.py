@@ -35,206 +35,168 @@ from .tokens import CustomRefreshToken, IsStudent
 from students.scope import DataScopeService
 from students.statistics import StudentStatisticsService
 
-from .models import (Attendance,Class,CompetitionScore,ExamAnswerRecord, ExamOption,ExamPaper,ExamPart,ExamQuestion,ExamRecord,League, News,Student, StudentAchievement,Teacher, TestRecord, UserAccount,)
+from .models import (Attendance,Class,CompetitionScore,ExamAnswerRecord, ExamOption,ExamPaper,ExamPart,ExamQuestion,ExamRecord,League, News,Student, StudentAchievement, TestRecord, UserAccount,)
+from django.shortcuts import redirect
 
-from .serializers import (ClassDashboardSerializer, ClassDetailSerializer, ClassListSerializer, ExamPaperImportSerializer,ExamPaperRetrieveSerializer, ExamStatsSerializer,ExamSubmitSerializer,FirstChangePasswordSerializer,ForgotPasswordSerializer, LeagueListSerializer,LoginSerializer, NewsSerializer, ResetPasswordSerializer, SchoolListSerializer, StudentAchievementCreateSerializer, StudentAchievementSerializer,StudentOutputSerializer,)
+from .serializers import (ClassDetailSerializer, ExamPaperImportSerializer,ExamPaperRetrieveSerializer,ExamSubmitSerializer,FirstChangePasswordSerializer,ForgotPasswordSerializer,LoginSerializer, NewsSerializer, ResetPasswordSerializer, StudentAchievementCreateSerializer, StudentAchievementSerializer,StudentOutputSerializer,)
 
 logger = logging.getLogger(__name__)
 DEFAULT_PASSWORD = "ENpassword123"  # 統一預設密碼
 
 
 # --------------------------------
-# Login API
+# Login API (Teacher Only)
 # --------------------------------
 class LoginView(APIView):
     permission_classes = []
 
     @swagger_auto_schema(
-        operation_description="登入系統 (老師使用 email；學生使用 student_id)",
-        operation_summary="登入",
+        operation_description="教職員帳號登入",
+        operation_summary="Teacher Login",
         request_body=LoginSerializer,
         responses={200: "登入成功"}
     )
     def post(self, request):
+
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         login_input = serializer.validated_data["username"]
         password = serializer.validated_data["password"]
 
-        user = UserAccount.objects.filter(username=login_input).first()
-        if not user:
-            user = UserAccount.objects.filter(email=login_input).first()
+        user = UserAccount.objects.filter(email=login_input).first()
+
         if not user:
             return Response({"detail": "帳號不存在"}, status=400)
+
+        if user.role != "teacher":
+            return Response({"detail": "此登入僅限教職員"}, status=403)
 
         if not check_password(password, user.password):
             return Response({"detail": "密碼錯誤"}, status=400)
 
         refresh = CustomRefreshToken.for_user(user)
 
-        response_data = {
+        return Response({
             "access": str(refresh.access_token),
             "refresh": str(refresh),
             "role": user.role,
             "first_login": user.first_login,
-        }
-
-        # ✅ 如果是學生，加上 student_id
-        if user.role == "student":
-            student = getattr(user, "student", None)
-            response_data["student_id"] = student.id if student else None
-
-        return Response(response_data)
+        })
 # --------------------------------
-# OIDC Login API
-# --------------------------------
-class OIDCLoginView(APIView):
-    permission_classes = []
-
-    def post(self, request):
-
-        backend = OIDCAuthenticationBackend()
-
-        # authenticate 會回傳 Django user
-        user = backend.authenticate(request)
-
-        if not user:
-            raise AuthenticationFailed("無法認證使用者")
-
-        user_email = getattr(user, "email", None)
-        user_sub = getattr(user, "username", None)
-        user_fullname = getattr(user, "first_name", "")
-
-        # 預設 teacher
-        user_role = "teacher"
-
-        # 如果 request 裡有 OIDC userinfo
-        userinfo = request.session.get("oidc_userinfo", {})
-
-        if userinfo:
-            kh_titles = userinfo.get("kh_titles", {})
-
-            if kh_titles and "學生" in kh_titles.values():
-                user_role = "student"
-
-        # -------------------------
-        # 查找 user
-        # -------------------------
-        if user_role == "student":
-            db_user = UserAccount.objects.filter(username=user_sub).first()
-        else:
-            db_user = UserAccount.objects.filter(email=user_email).first()
-
-        # -------------------------
-        # 建立 user
-        # -------------------------
-        if not db_user:
-
-            db_user = UserAccount.objects.create(
-                username=user_sub,
-                email=user_email,
-                role=user_role,
-                first_login=True,
-            )
-
-            if user_role == "student":
-
-                Student.objects.create(
-                    user=db_user,
-                    student_id=user_sub,
-                    student_name=user_fullname,
-                    school_name="未知學校",
-                    school_type="未知類型"
-                )
-
-            else:
-
-                Teacher.objects.create(
-                    user=db_user,
-                    teacher_name=user_fullname,
-                    school_name="未知學校",
-                    school_type="未知類型"
-                )
-
-        # -------------------------
-        # JWT Token
-        # -------------------------
-        refresh = CustomRefreshToken.for_user(db_user)
-
-        response_data = {
-            "access": str(refresh.access_token),
-            "refresh": str(refresh),
-            "role": db_user.role,
-            "first_login": db_user.first_login,
-        }
-
-        if db_user.role == "student":
-            response_data["student_id"] = user_sub
-
-        return Response(response_data)
-
-
-# --------------------------------
-# OIDC Callback
+# OIDC Login API 
 # --------------------------------
 class OIDCCallbackView(OIDCAuthenticationCallbackView):
-    """
-    OIDC 登入 callback
-    """
 
     def get(self, request, *args, **kwargs):
 
-        user = request.user
-
-        if not user.is_authenticated:
+        if not request.user.is_authenticated:
             raise AuthenticationFailed("OIDC 認證失敗")
 
-        user_email = user.email
-        user_sub = user.username
-        user_fullname = user.first_name
+        id_token = request.session.get("oidc_id_token")
 
-        userinfo = request.session.get("oidc_userinfo", {})
-        kh_titles = userinfo.get("kh_titles", {})
+        if not id_token:
+            raise AuthenticationFailed("無法取得 ID Token")
 
-        user_role = "student" if "學生" in kh_titles.values() else "teacher"
+        # =====================
+        # 解析 OIDC
+        # =====================
 
-        # -------------------------
-        # 查找 user
-        # -------------------------
-        if user_role == "student":
-            db_user = UserAccount.objects.filter(username=user_sub).first()
-        else:
-            db_user = UserAccount.objects.filter(email=user_email).first()
+        sub = id_token.get("sub")
+        email = id_token.get("email", "")
 
-        # -------------------------
-        # 建立 user
-        # -------------------------
-        if not db_user:
+        kh_profile = id_token.get("kh_profile", {})
+        kh_classes = id_token.get("kh_classes", {})
+        kh_titles = id_token.get("kh_titles", {})
 
-            db_user = UserAccount.objects.create(
-                username=user_sub,
-                email=user_email,
-                role=user_role,
-                first_login=True,
-            )
+        fullname = kh_profile.get("fullname", "")
+        school_id = kh_profile.get("schoolid", "")
 
-        # -------------------------
-        # JWT token
-        # -------------------------
-        refresh = CustomRefreshToken.for_user(db_user)
+        # 判斷學生
+        is_student = any("學生" in titles for titles in kh_titles.values())
 
-        response_data = {
-            "access": str(refresh.access_token),
-            "refresh": str(refresh),
-            "role": db_user.role,
-            "first_login": db_user.first_login,
-        }
+        if not is_student:
+            raise AuthenticationFailed("此登入僅提供學生")
 
-        if db_user.role == "student":
-            response_data["student_id"] = user_sub
+        # =====================
+        # 班級解析
+        # =====================
 
-        return Response(response_data)
+        grade = None
+        class_title = ""
+        school_type = ""
+
+        for school, cls in kh_classes.items():
+            class_title = cls.get("classTitle", "")
+            grade = int(cls.get("gradeId", 0))
+            school_type = cls.get("degree", "")
+
+        classroom = class_title.replace("一年", "").replace("二年", "").replace("三年", "").replace("班", "")
+
+        # =====================
+        # Class
+        # =====================
+
+        class_obj, _ = Class.objects.get_or_create(
+            school_name=school_id,
+            school_type=school_type,
+            grade=grade,
+            classroom=classroom,
+            defaults={"teachers": []}
+        )
+
+        # =====================
+        # User
+        # =====================
+
+        user, created = UserAccount.objects.get_or_create(
+            username=sub,
+            defaults={
+                "email": email,
+                "role": "student",
+                "first_login": True
+            }
+        )
+
+        # =====================
+        # Student
+        # =====================
+
+        student, created = Student.objects.get_or_create(
+            user=user,
+            defaults={
+                "student_id": sub,
+                "student_name": fullname,
+                "school_name": school_id,
+                "school_type": school_type,
+                "student_class": class_obj
+            }
+        )
+
+        if not created:
+            student.student_name = fullname
+            student.school_name = school_id
+            student.school_type = school_type
+            student.student_class = class_obj
+            student.save()
+
+        # =====================
+        # JWT
+        # =====================
+
+        refresh = CustomRefreshToken.for_user(user)
+
+        access_token = str(refresh.access_token)
+        refresh_token = str(refresh)
+
+        # =====================
+        # redirect 前端
+        # =====================
+
+        return redirect(
+            f"https://englishability.rootadviser.com/login-success"
+            f"?access={access_token}&refresh={refresh_token}"
+        )
 # --------------------------------
 # First Login: Change password
 # --------------------------------
