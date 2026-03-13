@@ -248,9 +248,12 @@ OIDC_STORE_ACCESS_TOKEN = True
 OIDC_STORE_ID_TOKEN = True
 
 # =========================
-# Callback
+# Callback URL
 # =========================
-OIDC_AUTHENTICATION_CALLBACK_URL = "/api/oidccallback/"
+OIDC_RP_CALLBACK_URL = "/api/oidccallback/"
 
-LOGIN_REDIRECT_URL = "/api/oidccallback/"
+# =========================
+# After login redirect
+# =========================
+LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/"
