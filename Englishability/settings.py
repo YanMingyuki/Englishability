@@ -211,48 +211,46 @@ DEFAULT_TO_EMAIL = os.getenv("DEFAULT_TO_EMAIL")
 
 FRONTEND_URL = " https://4ef4c372f5d7.ngrok-free.app"
 
-# -------------------------
+# =========================
 # OIDC Provider
-# -------------------------
-OIDC_OP_DISCOVERY_ENDPOINT = "https://oidc.kh.edu.tw/.well-known/openid-configuration"
+# =========================
+OIDC_OP_AUTHORIZATION_ENDPOINT = "https://oidc.kh.edu.tw/oauth2/auth"
+OIDC_OP_TOKEN_ENDPOINT = "https://oidc.kh.edu.tw/oauth2/token"
+OIDC_OP_USER_ENDPOINT = "https://oidc.kh.edu.tw/userinfo"
+OIDC_OP_JWKS_ENDPOINT = "https://oidc.kh.edu.tw/.well-known/jwks.json"
+OIDC_OP_ISSUER = "https://oidc.kh.edu.tw/"
 
-# -------------------------
+# =========================
 # Client
-# -------------------------
+# =========================
 OIDC_RP_CLIENT_ID = "kh_vendor_a95da8c087d6f9c3f62acc5e22c26f42"
 OIDC_RP_CLIENT_SECRET = "38efe712ebe3b6af5d7365441cf2e4d5b6d3c9dc07aa977f74d8f1c8e6c134d1"
 
-# -------------------------
+# =========================
 # Scope
-# -------------------------
+# =========================
 OIDC_RP_SCOPES = "openid email kh_profile kh_classes kh_titles"
 
-# -------------------------
+# =========================
 # Token auth method
-# KH OIDC 要求
-# -------------------------
+# =========================
 OIDC_TOKEN_ENDPOINT_AUTH_METHOD = "client_secret_post"
 
-# -------------------------
+# =========================
 # Security
-# -------------------------
+# =========================
 OIDC_RP_SIGN_ALGO = "RS256"
-OIDC_VERIFY_SSL = True
 
-# -------------------------
+# =========================
 # Token storage
-# -------------------------
+# =========================
 OIDC_STORE_ACCESS_TOKEN = True
 OIDC_STORE_ID_TOKEN = True
 
-# -------------------------
-# Callback URL
-# (非常重要)
-# -------------------------
+# =========================
+# Callback
+# =========================
 OIDC_AUTHENTICATION_CALLBACK_URL = "/api/oidccallback/"
 
-# -------------------------
-# Redirect
-# -------------------------
 LOGIN_REDIRECT_URL = "/api/oidccallback/"
 LOGOUT_REDIRECT_URL = "/"
