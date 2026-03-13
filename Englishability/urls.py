@@ -8,7 +8,7 @@ from drf_yasg import openapi
 from django.contrib import admin
 from django.urls import path
 
-from students.views import OIDCCallbackView, OIDCLoginView
+from students.views import OIDCCallbackView
 
 schema_view = get_schema_view(
    openapi.Info(
@@ -26,10 +26,10 @@ urlpatterns = [
     path('api/questionbank/', include('questionbank.urls')),
     path('api/students/', include('students.urls')), 
     path('api/swagger/', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),
-    # OIDC
+    # OIDC login
     path("api/oidc/", include("mozilla_django_oidc.urls")),
 
-    # callback
+    # OIDC callback
     path(
         "api/oidccallback/",
         OIDCCallbackView.as_view(),
