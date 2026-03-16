@@ -225,7 +225,16 @@ OIDC_RP_SIGN_ALGO = "RS256"
 
 OIDC_RP_SCOPES = "openid email kh_profile kh_classes kh_titles"
 
-OIDC_RP_CALLBACK_URL = "https://englishability.rootadviser.com/api/oidccallback/"
+# =========================
+# Callback URL 根據域名動態設定
+# =========================
+import os
+
+# 假設你部署環境透過環境變數傳 domain
+# 本地測試或不同域名可以切換
+CURRENT_DOMAIN = os.getenv("CURRENT_DOMAIN", "englishability.rootadviser.com")
+
+OIDC_RP_CALLBACK_URL = f"https://{CURRENT_DOMAIN}/api/oidccallback/"
 
 # =========================
 # Token endpoints 
@@ -259,5 +268,5 @@ OIDC_DJANGO_USER_MODEL = "auth.User"
 # Django login 設定 
 # =========================
 
-LOGIN_REDIRECT_URL = "/api/me/"
+LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/"

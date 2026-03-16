@@ -26,9 +26,10 @@ urlpatterns = [
     path('api/students/', include('students.urls')), 
     path('api/swagger/', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),
     # OIDC login
-    path("api/oidccallback/", oidc_views.OIDCAuthenticationCallbackView.as_view(), name="oidc_callback"),
-
-    path("oidc/login/", oidc_views.OIDCAuthenticationRequestView.as_view(), name="oidc_login"),
-
-    path("oidc/logout/", oidc_views.OIDCLogoutView.as_view(), name="oidc_logout"),
+    # 登入
+    path("api/oidc/login/", oidc_views.OIDCAuthenticationRequestView.as_view(), name="oidc_authentication_init"),
+    # 回調
+    path("api/oidccallback/", oidc_views.OIDCAuthenticationCallbackView.as_view(), name="oidc_authentication_callback"),
+    # 登出
+    path("api/oidc/logout/", oidc_views.OIDCLogoutView.as_view(), name="oidc_logout"),
 ]
