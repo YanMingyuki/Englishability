@@ -212,6 +212,7 @@ DEFAULT_TO_EMAIL = os.getenv("DEFAULT_TO_EMAIL")
 
 FRONTEND_URL = " https://4ef4c372f5d7.ngrok-free.app"
 
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 # =========================
 # OIDC 設定 
 # =========================
@@ -270,3 +271,4 @@ OIDC_DJANGO_USER_MODEL = "auth.User"
 
 LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/"
+
