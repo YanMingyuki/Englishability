@@ -269,6 +269,6 @@ OIDC_DJANGO_USER_MODEL = "auth.User"
 # Django login 設定 
 # =========================
 
-LOGIN_REDIRECT_URL = "/"
-LOGOUT_REDIRECT_URL = "/"
+LOGIN_REDIRECT_URL = "https://englishability.rootadviser.com/api/oidccallback/"
+LOGOUT_REDIRECT_URL = "https://englishability.rootadviser.com/api/oidccallback/"
 
