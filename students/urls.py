@@ -16,13 +16,13 @@ from .views import (
     ForgotPasswordView,
     ImportExamPaperAPIView,
     LoginView,
-    # ExcelImportView,
     FirstChangePasswordView,
     MyStudentsView,
     NewsCreateView,
     NewsDeleteView,
     NewsListView,
     NewsUpdateView,
+    OIDCCallback,
     ResetPasswordView,
     RetrieveExamPaperAPIView,
     SchoolDetailView,
@@ -109,4 +109,9 @@ urlpatterns = [
         name="exam-stats"
     ),
 
+    path(
+        "oidc/callback/",
+        OIDCCallback.as_view(),
+        name="oidc_callback"
+    ),
 ]   

@@ -57,7 +57,8 @@ INSTALLED_APPS = [
     'questionbank',
     'students',
     'rest_framework_simplejwt',
-    'corsheaders'
+    'corsheaders',
+    'mozilla_django_oidc'
 ]
 AUTH_USER_MODEL = 'students.UserAccount'    
 REST_FRAMEWORK = {
@@ -212,48 +213,51 @@ DEFAULT_TO_EMAIL = os.getenv("DEFAULT_TO_EMAIL")
 FRONTEND_URL = " https://4ef4c372f5d7.ngrok-free.app"
 
 # =========================
-# OIDC Provider
-# =========================
-OIDC_OP_AUTHORIZATION_ENDPOINT = "https://oidc.kh.edu.tw/oauth2/auth"
-OIDC_OP_TOKEN_ENDPOINT = "https://oidc.kh.edu.tw/oauth2/token"
-OIDC_OP_USER_ENDPOINT = "https://oidc.kh.edu.tw/userinfo"
-OIDC_OP_JWKS_ENDPOINT = "https://oidc.kh.edu.tw/.well-known/jwks.json"
-OIDC_OP_ISSUER = "https://oidc.kh.edu.tw/"
-
-# =========================
-# Client
+# OIDC 設定 
 # =========================
 OIDC_RP_CLIENT_ID = "kh_vendor_a95da8c087d6f9c3f62acc5e22c26f42"
+
 OIDC_RP_CLIENT_SECRET = "38efe712ebe3b6af5d7365441cf2e4d5b6d3c9dc07aa977f74d8f1c8e6c134d1"
 
-# =========================
-# Scope
-# =========================
-OIDC_RP_SCOPES = "openid email kh_profile kh_classes kh_titles"
+OIDC_OP_DISCOVERY_ENDPOINT = "https://oidc.kh.edu.tw/.well-known/openid-configuration"
 
-# =========================
-# Token auth method
-# =========================
-OIDC_TOKEN_ENDPOINT_AUTH_METHOD = "client_secret_post"
-
-# =========================
-# Security
-# =========================
 OIDC_RP_SIGN_ALGO = "RS256"
 
-# =========================
-# Token storage
-# =========================
-OIDC_STORE_ACCESS_TOKEN = True
-OIDC_STORE_ID_TOKEN = True
+OIDC_RP_SCOPES = "openid email kh_profile kh_classes kh_titles"
+
+OIDC_RP_CALLBACK_URL = "https://englishability.rootadviser.com/api/oidccallback/"
 
 # =========================
-# Callback URL
+# Token endpoints 
 # =========================
-OIDC_RP_CALLBACK_URL = "/api/oidccallback/"
+
+OIDC_OP_AUTHORIZATION_ENDPOINT = "https://oidc.kh.edu.tw/oauth2/auth"
+
+OIDC_OP_TOKEN_ENDPOINT = "https://oidc.kh.edu.tw/oauth2/token"
+
+OIDC_OP_JWKS_ENDPOINT = "https://oidc.kh.edu.tw/.well-known/jwks.json"
 
 # =========================
-# After login redirect
+# User info 
 # =========================
-LOGIN_REDIRECT_URL = "/"
+
+OIDC_OP_USER_ENDPOINT = "https://oidc.kh.edu.tw/userinfo"
+
+# =========================
+# OIDC 
+# =========================
+
+OIDC_RP_SIGN_ALGO = "RS256"
+
+OIDC_CREATE_USER = True
+
+OIDC_USERNAME_ALGO = "accounts.authentication.username_algo"
+
+OIDC_DJANGO_USER_MODEL = "auth.User"
+
+# =========================
+# Django login 設定 
+# =========================
+
+LOGIN_REDIRECT_URL = "/api/me/"
 LOGOUT_REDIRECT_URL = "/"

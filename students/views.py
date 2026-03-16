@@ -86,117 +86,12 @@ class LoginView(APIView):
 # --------------------------------
 # OIDC Login API 
 # --------------------------------
-class OIDCCallbackView(OIDCAuthenticationCallbackView):
+class OIDCCallback(OIDCAuthenticationCallbackView):
 
-    def get(self, request, *args, **kwargs):
-
-        if not request.user.is_authenticated:
-            raise AuthenticationFailed("OIDC 認證失敗")
-
-        id_token = request.session.get("oidc_id_token")
-
-        if not id_token:
-            raise AuthenticationFailed("無法取得 ID Token")
-
-        # =====================
-        # 解析 OIDC
-        # =====================
-
-        sub = id_token.get("sub")
-        email = id_token.get("email", "")
-
-        kh_profile = id_token.get("kh_profile", {})
-        kh_classes = id_token.get("kh_classes", {})
-        kh_titles = id_token.get("kh_titles", {})
-
-        fullname = kh_profile.get("fullname", "")
-        school_id = kh_profile.get("schoolid", "")
-
-        # 判斷學生
-        is_student = any("學生" in titles for titles in kh_titles.values())
-
-        if not is_student:
-            raise AuthenticationFailed("此登入僅提供學生")
-
-        # =====================
-        # 班級解析
-        # =====================
-
-        grade = None
-        class_title = ""
-        school_type = ""
-
-        for school, cls in kh_classes.items():
-            class_title = cls.get("classTitle", "")
-            grade = int(cls.get("gradeId", 0))
-            school_type = cls.get("degree", "")
-
-        classroom = class_title.replace("一年", "").replace("二年", "").replace("三年", "").replace("班", "")
-
-        # =====================
-        # Class
-        # =====================
-
-        class_obj, _ = Class.objects.get_or_create(
-            school_name=school_id,
-            school_type=school_type,
-            grade=grade,
-            classroom=classroom,
-            defaults={"teachers": []}
-        )
-
-        # =====================
-        # User
-        # =====================
-
-        user, created = UserAccount.objects.get_or_create(
-            username=sub,
-            defaults={
-                "email": email,
-                "role": "student",
-                "first_login": True
-            }
-        )
-
-        # =====================
-        # Student
-        # =====================
-
-        student, created = Student.objects.get_or_create(
-            user=user,
-            defaults={
-                "student_id": sub,
-                "student_name": fullname,
-                "school_name": school_id,
-                "school_type": school_type,
-                "student_class": class_obj
-            }
-        )
-
-        if not created:
-            student.student_name = fullname
-            student.school_name = school_id
-            student.school_type = school_type
-            student.student_class = class_obj
-            student.save()
-
-        # =====================
-        # JWT
-        # =====================
-
-        refresh = CustomRefreshToken.for_user(user)
-
-        access_token = str(refresh.access_token)
-        refresh_token = str(refresh)
-
-        # =====================
-        # redirect 前端
-        # =====================
-
-        return redirect(
-            f"https://englishability.rootadviser.com/login-success"
-            f"?access={access_token}&refresh={refresh_token}"
-        )
+    def login_success(self):
+        print("OIDC LOGIN SUCCESS")
+        print("Claims:", self.user)  # 或 self.request.user
+        return super().login_success()
 # --------------------------------
 # First Login: Change password
 # --------------------------------
