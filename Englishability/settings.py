@@ -212,7 +212,6 @@ DEFAULT_TO_EMAIL = os.getenv("DEFAULT_TO_EMAIL")
 
 FRONTEND_URL = " https://4ef4c372f5d7.ngrok-free.app"
 
-SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 # =============================
 # OIDC 基本設定
 # =============================
@@ -230,7 +229,7 @@ OIDC_RP_SCOPES = "openid email kh_profile kh_classes kh_titles"
 # callback
 # =============================
 
-OIDC_RP_CALLBACK_URL = "https://englishability.rootadviser.com/api/oidccallback/"
+OIDC_RP_CALLBACK_URL = "http://englishability.rootadviser.com/api/oidccallback/"
 
 # =============================
 # Endpoint (可省略，discovery會抓)
@@ -255,7 +254,7 @@ OIDC_NONCE_SIZE = 32
 # 高雄 OIDC 預設是 client_secret_post
 # =============================
 
-OIDC_TOKEN_USE_BASIC_AUTH = True
+OIDC_TOKEN_USE_BASIC_AUTH = False
 
 # =============================
 # Django user mapping
@@ -279,6 +278,8 @@ LOGOUT_REDIRECT_URL = "/"
 # =============================
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+USE_X_FORWARDED_HOST = True
+SECURE_SSL_REDIRECT = True
 
 # =============================
 # Debug log
