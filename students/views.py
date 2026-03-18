@@ -11,6 +11,9 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.timezone import make_aware
 from rest_framework.parsers import JSONParser
+import requests
+import jwt
+from jwt.algorithms import RSAAlgorithm
 
 from rest_framework import status,viewsets
 from rest_framework.parsers import FormParser, MultiPartParser
@@ -35,7 +38,7 @@ from .tokens import CustomRefreshToken, IsStudent
 from students.scope import DataScopeService
 from students.statistics import StudentStatisticsService
 
-from .models import (Attendance,Class,CompetitionScore,ExamAnswerRecord, ExamOption,ExamPaper,ExamPart,ExamQuestion,ExamRecord,League, News,Student, StudentAchievement, TestRecord, UserAccount,)
+from .models import (Attendance,Class,CompetitionScore,ExamAnswerRecord, ExamOption,ExamPaper,ExamPart,ExamQuestion,ExamRecord,League, News,Student, StudentAchievement, Teacher, TestRecord, UserAccount,)
 from django.shortcuts import redirect
 
 from .serializers import (ClassDetailSerializer, ExamPaperImportSerializer,ExamPaperRetrieveSerializer,ExamSubmitSerializer,FirstChangePasswordSerializer,ForgotPasswordSerializer,LoginSerializer, NewsSerializer, ResetPasswordSerializer, StudentAchievementCreateSerializer, StudentAchievementSerializer,StudentOutputSerializer,)
@@ -86,12 +89,113 @@ class LoginView(APIView):
 # --------------------------------
 # OIDC Login API 
 # --------------------------------
-class OIDCCallback(OIDCAuthenticationCallbackView):
+class OIDCStudentLogin(APIView):
+    def get(self, request):
+        try:
+            code = request.GET.get("code")
+            state = request.GET.get("state")
 
-    def login_success(self):
-        print("OIDC LOGIN SUCCESS")
-        print("Claims:", self.user)  # 或 self.request.user
-        return super().login_success()
+            if state != request.session.get("oidc_state"):
+                return Response({"error": "Invalid state"}, status=400)
+
+            # 1️⃣ 用 code 換 token
+            token_url = "https://oidc.kh.edu.tw/oauth2/token"
+            data = {
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": settings.OIDC_REDIRECT_URI,
+                "client_id": settings.OIDC_CLIENT_ID,
+                "client_secret": settings.OIDC_CLIENT_SECRET,
+            }
+            code_verifier = request.session.get("code_verifier")
+            if code_verifier:
+                data["code_verifier"] = code_verifier
+
+            token_resp = requests.post(token_url, data=data)
+            token_resp.raise_for_status()
+            token_data = token_resp.json()
+            id_token = token_data["id_token"]
+
+            # 2️⃣ 驗證 ID Token
+            jwks_uri = "https://oidc.kh.edu.tw/.well-known/jwks.json"
+            jwks = requests.get(jwks_uri).json()
+            header = jwt.get_unverified_header(id_token)
+            key_dict = next(k for k in jwks['keys'] if k['kid'] == header['kid'])
+            public_key = RSAAlgorithm.from_jwk(key_dict)
+
+            payload = jwt.decode(
+                id_token,
+                key=public_key,
+                algorithms=["RS256"],
+                audience=settings.OIDC_CLIENT_ID,
+                issuer="https://oidc.kh.edu.tw/"
+            )
+
+            # 3️⃣ 判斷是否為學生
+            kh_titles = payload.get("kh_titles", {})
+            is_student = False
+            for school_id, titles in kh_titles.items():
+                if "學生" in titles:
+                    is_student = True
+                    break
+
+            if not is_student:
+                # 若是教師或其他身份，回覆前端提示
+                return Response({
+                    "error": "請使用教職員登入口"
+                }, status=403)
+
+            # 4️⃣ 建立/更新學生帳號
+            sub = payload["sub"]
+            kh_profile = payload.get("kh_profile", {})
+            kh_classes = payload.get("kh_classes", {})
+
+            user, created = UserAccount.objects.get_or_create(
+                username=sub,
+                defaults={
+                    "email": kh_profile.get("email", ""),
+                    "role": "student",
+                    "date_joined": timezone.now(),
+                    "first_login": True
+                }
+            )
+
+            if not created:
+                user.first_login = False
+                user.save()
+
+            # 5️⃣ 建立 Class 與 Student
+            class_info = list(kh_classes.values())[0] if kh_classes else {}
+            class_obj, _ = Class.objects.get_or_create(
+                school_name=class_info.get("school_name", ""),
+                grade=int(class_info.get("gradeId", 1)),
+                classroom=class_info.get("classTitle", "A"),
+                defaults={
+                    "school_type": "國中" if class_info.get("schoolType") == "J" else "國小",
+                    "teachers": []
+                }
+            )
+
+            student, _ = Student.objects.get_or_create(user=user)
+            student.student_name = kh_profile.get("fullname", "王同學")
+            student.student_id = kh_profile.get("sub", sub)
+            student.school_name = class_info.get("school_name", "")
+            student.school_type = "國中" if class_info.get("schoolType") == "J" else "國小"
+            student.student_class = class_obj
+            student.save()
+
+            # 6️⃣ 產生 JWT
+            refresh = RefreshToken.for_user(user)
+
+            return Response({
+                "access": str(refresh.access_token),
+                "refresh": str(refresh),
+                "role": user.role,
+                "first_login": user.first_login,
+            })
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
 # --------------------------------
 # First Login: Change password
 # --------------------------------

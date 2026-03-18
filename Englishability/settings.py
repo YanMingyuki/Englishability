@@ -212,3 +212,6 @@ DEFAULT_TO_EMAIL = os.getenv("DEFAULT_TO_EMAIL")
 
 FRONTEND_URL = "https://4ef4c372f5d7.ngrok-free.app"
 
+OIDC_REDIRECT_URI = "https://englishability.rootadviser.com/api/oidccallback/"
+OIDC_CLIENT_ID = "38efe712ebe3b6af5d7365441cf2e4d5b6d3c9dc07aa977f74d8f1c8e6c134d1"
+OIDC_CLIENT_SECRET = "38efe712ebe3b6af5d7365441cf2e4d5b6d3c9dc07aa977f74d8f1c8e6c134d1"
