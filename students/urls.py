@@ -22,7 +22,6 @@ from .views import (
     NewsDeleteView,
     NewsListView,
     NewsUpdateView,
-    OIDCCallback,
     ResetPasswordView,
     RetrieveExamPaperAPIView,
     SchoolDetailView,
@@ -107,11 +106,5 @@ urlpatterns = [
         "exam-stats/",
         ExamStatsView.as_view(),
         name="exam-stats"
-    ),
-
-    path(
-        "oidc/callback/",
-        OIDCCallback.as_view(),
-        name="oidc_callback"
     ),
 ]   
