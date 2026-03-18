@@ -186,7 +186,7 @@ USE_I18N = True
 
 USE_TZ = True
 
-
+# SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
@@ -210,6 +210,5 @@ EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL")
 DEFAULT_TO_EMAIL = os.getenv("DEFAULT_TO_EMAIL")
 
-FRONTEND_URL = " https://4ef4c372f5d7.ngrok-free.app"
-
+FRONTEND_URL = "https://4ef4c372f5d7.ngrok-free.app"
 
