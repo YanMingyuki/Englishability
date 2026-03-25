@@ -26,10 +26,6 @@ from rest_framework_simplejwt.tokens import (RefreshToken,UntypedToken,TokenErro
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from students.services.dashboard_service import get_today_attendance_count, get_today_points, get_total_stars
-from mozilla_django_oidc.auth import OIDCAuthenticationBackend
-from rest_framework.exceptions import AuthenticationFailed
-
-from mozilla_django_oidc.views import OIDCAuthenticationCallbackView
 
 from .tasks import send_reset_password_email
 
@@ -72,7 +68,7 @@ class LoginView(APIView):
         if not user:
             return Response({"detail": "帳號不存在"}, status=400)
 
-        if user.role != "teacher":
+        if user.role == "teacher":
             return Response({"detail": "此登入僅限教職員"}, status=403)
 
         if not check_password(password, user.password):
@@ -90,66 +86,76 @@ class LoginView(APIView):
 # OIDC Login API 
 # --------------------------------
 class OIDCStudentLogin(APIView):
-    def get(self, request):
-        try:
-            code = request.GET.get("code")
-            state = request.GET.get("state")
-
-            if state != request.session.get("oidc_state"):
-                return Response({"error": "Invalid state"}, status=400)
-
-            # 1️⃣ 用 code 換 token
-            token_url = "https://oidc.kh.edu.tw/oauth2/token"
-            data = {
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": settings.OIDC_REDIRECT_URI,
-                "client_id": settings.OIDC_CLIENT_ID,
-                "client_secret": settings.OIDC_CLIENT_SECRET,
+    @swagger_auto_schema(
+        operation_summary="OIDC 學生登入（前端傳 userinfo）",
+        operation_description="前端完成 OIDC 後，將 userinfo 傳入後端進行登入/註冊",
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["sub"],
+            properties={
+                "sub": openapi.Schema(type=openapi.TYPE_STRING, description="OIDC 使用者唯一 ID"),
+                "kh_profile": openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        "fullname": openapi.Schema(type=openapi.TYPE_STRING),
+                        "email": openapi.Schema(type=openapi.TYPE_STRING),
+                    }
+                ),
+                "kh_titles": openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    additional_properties=openapi.Schema(
+                        type=openapi.TYPE_ARRAY,
+                        items=openapi.Items(type=openapi.TYPE_STRING)
+                    )
+                ),
+                "kh_classes": openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    additional_properties=openapi.Schema(
+                        type=openapi.TYPE_OBJECT,
+                        properties={
+                            "school_name": openapi.Schema(type=openapi.TYPE_STRING),
+                            "gradeId": openapi.Schema(type=openapi.TYPE_STRING),
+                            "classTitle": openapi.Schema(type=openapi.TYPE_STRING),
+                            "schoolType": openapi.Schema(type=openapi.TYPE_STRING),
+                        }
+                    )
+                ),
             }
-            code_verifier = request.session.get("code_verifier")
-            if code_verifier:
-                data["code_verifier"] = code_verifier
+        ),
+        responses={
+            200: openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                properties={
+                    "access": openapi.Schema(type=openapi.TYPE_STRING),
+                    "refresh": openapi.Schema(type=openapi.TYPE_STRING),
+                    "role": openapi.Schema(type=openapi.TYPE_STRING),
+                    "first_login": openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                }
+            ),
+            400: "Missing sub",
+            403: "請使用教職員登入口",
+            500: "Server Error"
+        }
+    )
+    def post(self, request):
+        try:
+            payload = request.data
 
-            token_resp = requests.post(token_url, data=data)
-            token_resp.raise_for_status()
-            token_data = token_resp.json()
-            id_token = token_data["id_token"]
+            # 1️⃣ 基本欄位檢查
+            sub = payload.get("sub")
+            if not sub:
+                return Response({"error": "Missing sub"}, status=400)
 
-            # 2️⃣ 驗證 ID Token
-            jwks_uri = "https://oidc.kh.edu.tw/.well-known/jwks.json"
-            jwks = requests.get(jwks_uri).json()
-            header = jwt.get_unverified_header(id_token)
-            key_dict = next(k for k in jwks['keys'] if k['kid'] == header['kid'])
-            public_key = RSAAlgorithm.from_jwk(key_dict)
-
-            payload = jwt.decode(
-                id_token,
-                key=public_key,
-                algorithms=["RS256"],
-                audience=settings.OIDC_CLIENT_ID,
-                issuer="https://oidc.kh.edu.tw/"
-            )
-
-            # 3️⃣ 判斷是否為學生
             kh_titles = payload.get("kh_titles", {})
-            is_student = False
-            for school_id, titles in kh_titles.items():
-                if "學生" in titles:
-                    is_student = True
-                    break
-
-            if not is_student:
-                # 若是教師或其他身份，回覆前端提示
-                return Response({
-                    "error": "請使用教職員登入口"
-                }, status=403)
-
-            # 4️⃣ 建立/更新學生帳號
-            sub = payload["sub"]
             kh_profile = payload.get("kh_profile", {})
             kh_classes = payload.get("kh_classes", {})
 
+            # 2️⃣ 判斷是否為學生
+            is_student = any("學生" in titles for titles in kh_titles.values())
+            if not is_student:
+                return Response({"error": "請使用教職員登入口"}, status=403)
+
+            # 3️⃣ User
             user, created = UserAccount.objects.get_or_create(
                 username=sub,
                 defaults={
@@ -164,27 +170,29 @@ class OIDCStudentLogin(APIView):
                 user.first_login = False
                 user.save()
 
-            # 5️⃣ 建立 Class 與 Student
+            # 4️⃣ Class
             class_info = list(kh_classes.values())[0] if kh_classes else {}
+
             class_obj, _ = Class.objects.get_or_create(
                 school_name=class_info.get("school_name", ""),
                 grade=int(class_info.get("gradeId", 1)),
                 classroom=class_info.get("classTitle", "A"),
                 defaults={
-                    "school_type": "國中" if class_info.get("schoolType") == "J" else "國小",
+                    "school_type": "國中" if class_info.get("schoolType") == "J" else "資料錯誤",
                     "teachers": []
                 }
             )
 
+            # 5️⃣ Student
             student, _ = Student.objects.get_or_create(user=user)
-            student.student_name = kh_profile.get("fullname", "王同學")
-            student.student_id = kh_profile.get("sub", sub)
-            student.school_name = class_info.get("school_name", "")
-            student.school_type = "國中" if class_info.get("schoolType") == "J" else "國小"
+            student.student_name = kh_profile.get("fullname", "資料錯誤")
+            student.student_id = sub
+            student.school_name = class_info.get("school_name", "資料錯誤")
+            student.school_type = "國中" if class_info.get("schoolType") == "J" else "資料錯誤"
             student.student_class = class_obj
             student.save()
 
-            # 6️⃣ 產生 JWT
+            # 6️⃣ JWT
             refresh = RefreshToken.for_user(user)
 
             return Response({

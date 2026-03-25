@@ -22,6 +22,7 @@ from .views import (
     NewsDeleteView,
     NewsListView,
     NewsUpdateView,
+    OIDCStudentLogin,
     ResetPasswordView,
     RetrieveExamPaperAPIView,
     SchoolDetailView,
@@ -106,5 +107,11 @@ urlpatterns = [
         "exam-stats/",
         ExamStatsView.as_view(),
         name="exam-stats"
+    ),
+    
+    path(
+        "oidc/oidclogin/",
+        OIDCStudentLogin.as_view(),
+        name="oidc_login"
     ),
 ]   
