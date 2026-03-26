@@ -93,49 +93,12 @@ class OIDCStudentLogin(APIView):
             type=openapi.TYPE_OBJECT,
             required=["sub"],
             properties={
-                "sub": openapi.Schema(type=openapi.TYPE_STRING, description="OIDC 使用者唯一 ID"),
-                "kh_profile": openapi.Schema(
-                    type=openapi.TYPE_OBJECT,
-                    properties={
-                        "fullname": openapi.Schema(type=openapi.TYPE_STRING),
-                        "email": openapi.Schema(type=openapi.TYPE_STRING),
-                    }
-                ),
-                "kh_titles": openapi.Schema(
-                    type=openapi.TYPE_OBJECT,
-                    additional_properties=openapi.Schema(
-                        type=openapi.TYPE_ARRAY,
-                        items=openapi.Items(type=openapi.TYPE_STRING)
-                    )
-                ),
-                "kh_classes": openapi.Schema(
-                    type=openapi.TYPE_OBJECT,
-                    additional_properties=openapi.Schema(
-                        type=openapi.TYPE_OBJECT,
-                        properties={
-                            "school_name": openapi.Schema(type=openapi.TYPE_STRING),
-                            "gradeId": openapi.Schema(type=openapi.TYPE_STRING),
-                            "classTitle": openapi.Schema(type=openapi.TYPE_STRING),
-                            "schoolType": openapi.Schema(type=openapi.TYPE_STRING),
-                        }
-                    )
-                ),
+                "sub": openapi.Schema(type=openapi.TYPE_STRING),
+                "kh_profile": openapi.Schema(type=openapi.TYPE_OBJECT),
+                "kh_titles": openapi.Schema(type=openapi.TYPE_OBJECT),
+                "kh_classes": openapi.Schema(type=openapi.TYPE_OBJECT),
             }
         ),
-        responses={
-            200: openapi.Schema(
-                type=openapi.TYPE_OBJECT,
-                properties={
-                    "access": openapi.Schema(type=openapi.TYPE_STRING),
-                    "refresh": openapi.Schema(type=openapi.TYPE_STRING),
-                    "role": openapi.Schema(type=openapi.TYPE_STRING),
-                    "first_login": openapi.Schema(type=openapi.TYPE_BOOLEAN),
-                }
-            ),
-            400: "Missing sub",
-            403: "請使用教職員登入口",
-            500: "Server Error"
-        }
     )
     def post(self, request):
         try:
@@ -170,11 +133,17 @@ class OIDCStudentLogin(APIView):
                 user.first_login = False
                 user.save()
 
-            # 4️⃣ Class
-            class_info = list(kh_classes.values())[0] if kh_classes else {}
+            # ✅ 修正 1：安全取得 class_info
+            class_info = next(iter(kh_classes.values()), {})
 
+            # ✅ 修正 2：school_name 改從 kh_profile.schools 取
+            school_map = kh_profile.get("schools", {})
+            school_id = next(iter(school_map.keys()), None)
+            school_name = school_map.get(school_id, "")
+
+            # 4️⃣ Class（維持原邏輯）
             class_obj, _ = Class.objects.get_or_create(
-                school_name=class_info.get("school_name", ""),
+                school_name=school_name,
                 grade=int(class_info.get("gradeId", 1)),
                 classroom=class_info.get("classTitle", "A"),
                 defaults={
@@ -183,11 +152,15 @@ class OIDCStudentLogin(APIView):
                 }
             )
 
+            # ✅ 修正 3：保底（避免 NULL）
+            if not class_obj:
+                return Response({"error": "Class 建立失敗"}, status=500)
+
             # 5️⃣ Student
             student, _ = Student.objects.get_or_create(user=user)
             student.student_name = kh_profile.get("fullname", "資料錯誤")
             student.student_id = sub
-            student.school_name = class_info.get("school_name", "資料錯誤")
+            student.school_name = school_name or "資料錯誤"
             student.school_type = "國中" if class_info.get("schoolType") == "J" else "資料錯誤"
             student.student_class = class_obj
             student.save()
