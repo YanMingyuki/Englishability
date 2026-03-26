@@ -100,6 +100,7 @@ class OIDCStudentLogin(APIView):
             }
         ),
     )
+    @transaction.atomic  # 保證整個流程要么成功要么 rollback
     def post(self, request):
         try:
             payload = request.data
@@ -133,39 +134,66 @@ class OIDCStudentLogin(APIView):
                 user.first_login = False
                 user.save()
 
-            # ✅ 修正 1：安全取得 class_info
+            # =========================
+            # 🔥 Class 處理
+            # =========================
             class_info = next(iter(kh_classes.values()), {})
 
-            # ✅ 修正 2：school_name 改從 kh_profile.schools 取
+            # school_name
             school_map = kh_profile.get("schools", {})
             school_id = next(iter(school_map.keys()), None)
-            school_name = school_map.get(school_id, "")
+            school_name = school_map.get(school_id)
+            if not school_name:
+                return Response({"error": "school_name 缺失"}, status=400)
 
-            # 4️⃣ Class（維持原邏輯）
-            class_obj, _ = Class.objects.get_or_create(
+            # gradeId → grade
+            try:
+                grade = int(class_info.get("gradeId", 1))
+            except (TypeError, ValueError):
+                grade = 1
+
+            # classId → classroom
+            try:
+                classroom = str(int(class_info.get("classId", 1)))
+            except (TypeError, ValueError):
+                classroom = "1"
+
+            # school_type
+            school_type = "國中" if class_info.get("schoolType") == "J" else "國小"
+
+            # 查找或建立 Class
+            class_obj = Class.objects.filter(
                 school_name=school_name,
-                grade=int(class_info.get("gradeId", 1)),
-                classroom=class_info.get("classTitle", "A"),
-                defaults={
-                    "school_type": "國中" if class_info.get("schoolType") == "J" else "資料錯誤",
-                    "teachers": []
-                }
+                grade=grade,
+                classroom=classroom
+            ).first()
+            if not class_obj:
+                class_obj = Class.objects.create(
+                    school_name=school_name,
+                    grade=grade,
+                    classroom=classroom,
+                    school_type=school_type
+                )
+
+            # =========================
+            # 🔥 Student 建立/更新（關鍵修正）
+            # =========================
+            student_data = {
+                "student_name": kh_profile.get("fullname", "資料錯誤"),
+                "student_id": sub,
+                "school_name": school_name,
+                "school_type": school_type,
+                "student_class": class_obj,  # ⚠ 必填
+            }
+
+            student, created = Student.objects.update_or_create(
+                user=user,
+                defaults=student_data
             )
 
-            # ✅ 修正 3：保底（避免 NULL）
-            if not class_obj:
-                return Response({"error": "Class 建立失敗"}, status=500)
-
-            # 5️⃣ Student
-            student, _ = Student.objects.get_or_create(user=user)
-            student.student_name = kh_profile.get("fullname", "資料錯誤")
-            student.student_id = sub
-            student.school_name = school_name or "資料錯誤"
-            student.school_type = "國中" if class_info.get("schoolType") == "J" else "資料錯誤"
-            student.student_class = class_obj
-            student.save()
-
-            # 6️⃣ JWT
+            # =========================
+            # 🔥 JWT
+            # =========================
             refresh = RefreshToken.for_user(user)
 
             return Response({
