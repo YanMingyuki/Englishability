@@ -86,7 +86,7 @@ class Student(models.Model):
     school_type = models.CharField(max_length=10)
     student_name = models.CharField(max_length=100)
     student_class = models.ForeignKey(Class, on_delete=models.CASCADE, related_name="students")
-    student_id = models.CharField(max_length=50, unique=True)  # 🔥 帳號來源
+    student_id = models.CharField(max_length=128, unique=True)  # 🔥 帳號來源
 
     def __str__(self):
         return self.student_name
