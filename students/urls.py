@@ -3,6 +3,7 @@
 from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
 from rest_framework.routers import DefaultRouter
+from students.tokenchange import OIDCTokenView
 
 from .views import (
     AttendanceAPIView,
@@ -114,4 +115,7 @@ urlpatterns = [
         OIDCStudentLogin.as_view(),
         name="oidc_login"
     ),
+    
+    path("oidc/token/", OIDCTokenView.as_view()),
+
 ]   
