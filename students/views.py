@@ -1622,9 +1622,17 @@ class DashboardSummaryView(APIView):
         # -------------------------------
         elif role == "union_leader":
             teacher_school = request.user.teacher.school_name
-            leagues = League.objects.filter(school_name=teacher_school)
-            if not leagues.exists():
+
+            # 1️⃣ 找老師學校所屬聯盟
+            try:
+                league_obj = League.objects.get(school_name=teacher_school)
+            except League.DoesNotExist:
                 return Response({"detail": "找不到對應聯盟資料"}, status=404)
+
+            league_name = league_obj.league_name
+
+            # 2️⃣ 找這個聯盟下所有學校
+            schools_in_league = League.objects.filter(league_name=league_name).values("school_name").distinct()
 
             total_students = 0
             total_stars = 0
@@ -1632,8 +1640,10 @@ class DashboardSummaryView(APIView):
             today_competition_participants = 0
             today_participation = 0
 
-            for league in leagues:
-                students = Student.objects.filter(school_name=league.school_name)
+            # 3️⃣ 對每個學校計算統計
+            for school in schools_in_league:
+                school_name = school["school_name"]
+                students = Student.objects.filter(school_name=school_name)
                 student_ids = students.values_list("id", flat=True)
 
                 total_students += students.count()
@@ -1646,12 +1656,14 @@ class DashboardSummaryView(APIView):
                 today_competition_participants += comp_qs.filter(time__date=today).values("student").distinct().count()
 
             data = {
-                "school_total": leagues.count(),
+                "league_name": league_name,
+                "school_total": schools_in_league.count(),  # 聯盟下學校總數
                 "student_total": total_students,
                 "total_stars": total_stars,
                 "competition_total_score": competition_total_score,
                 "today_competition_participants": today_competition_participants,
                 "today_participation": today_participation,  # ✅ 新增今天簽到人數
+                "school_list": [s["school_name"] for s in schools_in_league],  # 可選：列出學校名稱
             }
             return Response(data)
 
@@ -1820,26 +1832,26 @@ class DashboardListView(APIView):
 
             teacher_school = request.user.teacher.school_name
 
-            leagues = League.objects.filter(
-                school_name=teacher_school
-            ).distinct()
+            # 1️⃣ 找老師學校所屬聯盟
+            try:
+                league_obj = League.objects.get(school_name=teacher_school)
+            except League.DoesNotExist:
+                return Response({"detail": "找不到對應聯盟資料"}, status=404)
 
-            if not leagues.exists():
-                return Response(
-                    {"detail": "找不到對應聯盟資料"},
-                    status=404
-                )
+            league_name = league_obj.league_name
+
+            # 2️⃣ 找聯盟下所有學校
+            schools_in_league = League.objects.filter(
+                league_name=league_name
+            ).values("school_name").distinct()
 
             results = []
 
-            for league in leagues:
+            # 3️⃣ 對每個學校計算統計
+            for school in schools_in_league:
+                school_name = school["school_name"]
 
-                school_name = league.school_name
-
-                students = Student.objects.filter(
-                    school_name=school_name
-                ).distinct()
-
+                students = Student.objects.filter(school_name=school_name).distinct()
                 student_ids = students.values_list("id", flat=True)
 
                 today_participation = get_today_attendance_count(students)
@@ -1853,16 +1865,10 @@ class DashboardListView(APIView):
                     time__date=today
                 )
 
-                competition_total_score = comp_qs.aggregate(
-                    total=Sum("score")
-                )["total"] or 0
-
-                today_competition_participants = comp_qs.values(
-                    "student"
-                ).distinct().count()
+                competition_total_score = comp_qs.aggregate(total=Sum("score"))["total"] or 0
+                today_competition_participants = comp_qs.values("student").distinct().count()
 
                 results.append({
-                    "id": league.id,
                     "school_name": school_name,
                     "student_total": students.count(),
                     "today_participation": today_participation,
@@ -1872,7 +1878,9 @@ class DashboardListView(APIView):
                 })
 
             return Response({
-                "level": "school",
+                "level": "league",
+                "league_name": league_name,
+                "school_total": schools_in_league.count(),
                 "results": results
             })
 
