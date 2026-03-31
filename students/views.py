@@ -1669,8 +1669,8 @@ class DashboardSummaryView(APIView):
             today_competition_participants = comp_qs.filter(time__date=today).values("student").distinct().count()
 
             data = {
-                "league_total": League.objects.count(),
-                "school_total": students.values("school_name").distinct().count(),
+                "league_total" : League.objects.values("league_name").distinct().count(),
+                "school_total" : League.objects.values("school_name").distinct().count(),
                 "student_total": students.count(),
                 "total_stars": get_total_stars(students),
                 "competition_total_score": competition_total_score,

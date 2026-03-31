@@ -1,0 +1,158 @@
+BEGIN;
+
+-- =========================
+-- 1️⃣ 總召
+-- =========================
+-- 建立總召 user
+INSERT INTO students_useraccount (username,email,role,is_active,is_staff,is_superuser,first_login,date_joined,password)
+SELECT *
+FROM (
+    SELECT 'global_leader@mail','global_leader@mail','global_leader',true,true,true,true,NOW(),
+           'pbkdf2_sha256$600000$AW8ox1DHX5cJjnZ19ORYac$yxpH1dMz6IXCnHF7NESb+3VnzDRgoKXiYX77qHPxwbc='
+) t
+WHERE NOT EXISTS (
+    SELECT 1 FROM students_useraccount WHERE username='global_leader@mail'
+);
+
+-- 建立總召 teacher
+INSERT INTO students_teacher (user_id, school_name, school_type, teacher_name)
+SELECT u.id,'SYSTEM','國中','總召集人'
+FROM students_useraccount u
+LEFT JOIN students_teacher t ON t.user_id = u.id
+WHERE u.username='global_leader@mail'
+  AND t.user_id IS NULL;  -- 如果 teacher 已存在就不插入
+
+
+-- =========================
+-- 2️⃣ 聯盟召集人（無 WITH）
+-- =========================
+-- 建立聯盟召集人 users
+INSERT INTO students_useraccount (username,email,role,is_active,is_staff,is_superuser,first_login,date_joined,password)
+SELECT d.username,d.username,'union_leader',true,true,false,true,NOW(),
+       'pbkdf2_sha256$600000$AW8ox1DHX5cJjnZ19ORYac$yxpH1dMz6IXCnHF7NESb+3VnzDRgoKXiYX77qHPxwbc='
+FROM (VALUES
+  ('sea_union@mail'),
+  ('meinong_union@mail'),
+  ('suburb_union@mail'),
+  ('mountain_union@mail')
+) AS d(username)
+WHERE NOT EXISTS (
+    SELECT 1 FROM students_useraccount u WHERE u.username=d.username
+);
+
+-- 建立聯盟召集人 teacher
+INSERT INTO students_teacher (user_id, school_name, school_type, teacher_name)
+SELECT u.id, u.username, '國中','聯盟召集人'
+FROM students_useraccount u
+LEFT JOIN students_teacher t ON t.user_id = u.id
+WHERE u.role='union_leader' AND t.user_id IS NULL;
+
+-- =========================
+-- 3️⃣ 學校 user（無 WITH）
+-- =========================
+INSERT INTO students_useraccount
+(username,email,role,is_active,is_staff,is_superuser,first_login,date_joined,password)
+SELECT
+    s.code || '@mail',
+    s.code || '@mail',
+    'school_admin',
+    true,false,false,true,
+    NOW(),
+    'pbkdf2_sha256$600000$AW8ox1DHX5cJjnZ19ORYac$yxpH1dMz6IXCnHF7NESb+3VnzDRgoKXiYX77qHPxwbc='
+FROM (
+VALUES
+('ziguan_jh','國中'),('ziguan_es','國小'),('keliao_jh','國中'),('keliao_es','國小'),
+('mituo_jh','國中'),('mituo_es','國小'),('nanan_es','國小'),('shouling_es','國小'),
+('yongan_jh','國中'),('yongan_es','國小'),('weixin_es','國小'),('xingang_es','國小'),
+('jiading_jh','國中'),('jiading_es','國小'),('chenggong_es','國小'),('xingda_es','國小'),
+('shalun_es','國小'),('meinong_jh','國中'),('meinong_es','國小'),('fuan_es','國小'),('dongmen_es','國小'),
+('nanlong_jh','國中'),('zhongtan_es','國小'),('jiyang_es','國小'),('jidong_es','國小'),
+('longshan_es','國小'),('longdu_jh','國中'),('longdu_es','國小'),('guangxing_es','國小'),
+('niaosong_jh','國中'),('niaosong_es','國小'),('renmei_es','國小'),('yanchao_jh','國中'),
+('yanchao_es','國小'),('anzhao_es','國小'),('fengxiong_es','國小'),('jinshan_es','國小'),
+('hengshan_es','國小'),('shenshui_es','國小'),('xingren_jh','國中'),('qianzhen_es','國小'),
+('zhenchang_es','國小'),('jiaxing_jh','國中'),('jiaxing_es','國小'),
+('dashu_jh','國中'),('dashu_es','國小'),('jiuqu_es','國小'),('longmu_es','國小'),
+('xiaoping_es','國小'),('shuiliao_es','國小'),('xingtian_es','國小'),('daliao_jh','國中'),
+('yongfang_es','國小'),('zhongyi_es','國小'),('daliao_es','國小'),('shanding_es','國小'),
+('dazhou_jh','國中'),('xizhou_es','國小'),('lingkou_es','國小'),('neimen_jh','國中'),
+('neimen_es','國小'),('muzha_es','國小'),('xipu_jh','國中'),('xipu_es','國小'),
+('gushan_es','國小'),('zhongzhuang_jh','國中'),('zhongzhuang_es','國小'),
+('xiliao_es','國小'),('houzhuang_es','國小'),('lide_jh','國中'),('zuoying_es','國小'),
+('mingde_es','國小'),('pingshan_es','國小'),('jiucheng_es','國小'),
+('zhongxiao_jh','國中'),('chaoliao_jh','國中'),('chaoliao_es','國小'),
+('zhaoming_es','國小'),('zhongyun_jh','國中'),('zhongyun_es','國小'),
+('shanwei_es','國小'),('gangpu_es','國小'),('namaxia_jh','國中'),
+('minquan_es','國小'),('minsheng_es','國小'),('jiaxian_jh','國中'),
+('jiaxian_es','國小'),('xiaolin_es','國小'),('shanlin_jh','國中'),
+('shanlin_es','國小'),('yuemei_es','國小'),('xinzhuang_es','國小'),
+('shangping_es','國小'),('yuanfu_jh','國中'),('yuantan_es','國小'),
+('jinzhu_es','國小'),('gouping_es','國小'),('bnh_es','國小'),('bnh_jh','國中') ,
+('liugui_jh','國中'),('liugui_es','國小'),('longxing_es','國小'),
+('xinfa_es','國小'),('laonong_es','國小'),('baolai_jh','國中'),
+('baolai_es','國小'),('taoyuan_jh','國中'),('baoshan_es','國小'),
+('jianshan_es','國小'),('xingzhong_es','國小'),('taoyuan_es','國小'),
+('zhangshan_es','國小'),('maolin_jh','國中'),('maolin_es','國小'),
+('duona_es','國小'),('linyuan_jh','國中'),('linyuan_es','國小'),
+('wanggong_es','國小'),('jintan_es','國小'),('fenglin_jh','國中'),
+('fenglin_es','國小'),('fengming_es','國小')
+) AS s(code, school_type)
+WHERE NOT EXISTS (
+    SELECT 1 FROM students_useraccount u WHERE u.username = s.code || '@mail'
+);
+
+-- =========================
+-- 4️⃣ 學校 teacher（無 WITH）
+-- =========================
+INSERT INTO students_teacher (user_id, school_name, school_type, teacher_name)
+SELECT
+    u.id,
+    s.code,
+    s.school_type,
+    s.code || '_admin'
+FROM (
+VALUES
+('ziguan_jh','國中'),('ziguan_es','國小'),('keliao_jh','國中'),('keliao_es','國小'),
+('mituo_jh','國中'),('mituo_es','國小'),('nanan_es','國小'),('shouling_es','國小'),
+('yongan_jh','國中'),('yongan_es','國小'),('weixin_es','國小'),('xingang_es','國小'),
+('jiading_jh','國中'),('jiading_es','國小'),('chenggong_es','國小'),('xingda_es','國小'),
+('shalun_es','國小'),('meinong_jh','國中'),('meinong_es','國小'),('fuan_es','國小'),('dongmen_es','國小'),
+('nanlong_jh','國中'),('zhongtan_es','國小'),('jiyang_es','國小'),('jidong_es','國小'),
+('longshan_es','國小'),('longdu_jh','國中'),('longdu_es','國小'),('guangxing_es','國小'),
+('niaosong_jh','國中'),('niaosong_es','國小'),('renmei_es','國小'),('yanchao_jh','國中'),
+('yanchao_es','國小'),('anzhao_es','國小'),('fengxiong_es','國小'),('jinshan_es','國小'),
+('hengshan_es','國小'),('shenshui_es','國小'),('xingren_jh','國中'),('qianzhen_es','國小'),
+('zhenchang_es','國小'),('jiaxing_jh','國中'),('jiaxing_es','國小'),
+('dashu_jh','國中'),('dashu_es','國小'),('jiuqu_es','國小'),('longmu_es','國小'),
+('xiaoping_es','國小'),('shuiliao_es','國小'),('xingtian_es','國小'),('daliao_jh','國中'),
+('yongfang_es','國小'),('zhongyi_es','國小'),('daliao_es','國小'),('shanding_es','國小'),
+('dazhou_jh','國中'),('xizhou_es','國小'),('lingkou_es','國小'),('neimen_jh','國中'),
+('neimen_es','國小'),('muzha_es','國小'),('xipu_jh','國中'),('xipu_es','國小'),
+('gushan_es','國小'),('zhongzhuang_jh','國中'),('zhongzhuang_es','國小'),
+('xiliao_es','國小'),('houzhuang_es','國小'),('lide_jh','國中'),('zuoying_es','國小'),
+('mingde_es','國小'),('pingshan_es','國小'),('jiucheng_es','國小'),
+('zhongxiao_jh','國中'),('chaoliao_jh','國中'),('chaoliao_es','國小'),
+('zhaoming_es','國小'),('zhongyun_jh','國中'),('zhongyun_es','國小'),
+('shanwei_es','國小'),('gangpu_es','國小'),('namaxia_jh','國中'),
+('minquan_es','國小'),('minsheng_es','國小'),('jiaxian_jh','國中'),
+('jiaxian_es','國小'),('xiaolin_es','國小'),('shanlin_jh','國中'),
+('shanlin_es','國小'),('yuemei_es','國小'),('xinzhuang_es','國小'),
+('shangping_es','國小'),('yuanfu_jh','國中'),('yuantan_es','國小'),
+('jinzhu_es','國小'),('gouping_es','國小'),('bnh_es','國小'),('bnh_jh','國中') ,
+('liugui_jh','國中'),('liugui_es','國小'),('longxing_es','國小'),
+('xinfa_es','國小'),('laonong_es','國小'),('baolai_jh','國中'),
+('baolai_es','國小'),('taoyuan_jh','國中'),('baoshan_es','國小'),
+('jianshan_es','國小'),('xingzhong_es','國小'),('taoyuan_es','國小'),
+('zhangshan_es','國小'),('maolin_jh','國中'),('maolin_es','國小'),
+('duona_es','國小'),('linyuan_jh','國中'),('linyuan_es','國小'),
+('wanggong_es','國小'),('jintan_es','國小'),('fenglin_jh','國中'),
+('fenglin_es','國小'),('fengming_es','國小')
+)
+ AS s(code, school_type)
+JOIN students_useraccount u
+ON u.username = s.code || '@mail'
+WHERE NOT EXISTS (
+    SELECT 1 FROM students_teacher t WHERE t.user_id = u.id
+);
+
+COMMIT;
