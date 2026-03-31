@@ -1771,7 +1771,6 @@ class DashboardListView(APIView):
             date_str,
             "%Y-%m-%d"
         ).date() if date_str else timezone.localdate()
-
         # =================================
         # School Admin
         # =================================
@@ -1779,15 +1778,13 @@ class DashboardListView(APIView):
 
             school_name = request.user.teacher.school_name
 
-            classes = Class.objects.filter(
-                school_name=school_name
-            ).distinct()
+            classes = Class.objects.filter(school_name=school_name).distinct()
 
             results = []
 
             for c in classes:
-
-                students = c.students.all().distinct()
+                # 正確的 FK 欄位
+                students = Student.objects.filter(student_class=c).distinct()
                 student_ids = students.values_list("id", flat=True)
 
                 today_participation = get_today_attendance_count(students)
@@ -1800,14 +1797,8 @@ class DashboardListView(APIView):
                     student_id__in=student_ids,
                     time__date=today
                 )
-
-                competition_total_score = comp_qs.aggregate(
-                    total=Sum("score")
-                )["total"] or 0
-
-                today_competition_participants = comp_qs.values(
-                    "student"
-                ).distinct().count()
+                competition_total_score = comp_qs.aggregate(total=Sum("score"))["total"] or 0
+                today_competition_participants = comp_qs.values("student").distinct().count()
 
                 results.append({
                     "id": c.id,
@@ -1822,6 +1813,8 @@ class DashboardListView(APIView):
 
             return Response({
                 "level": "class",
+                "school_name": school_name,
+                "class_total": classes.count(),
                 "results": results
             })
 
